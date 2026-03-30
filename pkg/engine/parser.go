@@ -3,6 +3,7 @@ package engine
 import (
 	"context"
 	"fmt"
+	"strings"
 
 	sitter "github.com/smacker/go-tree-sitter"
 	"github.com/smacker/go-tree-sitter/golang"
@@ -13,11 +14,76 @@ import (
 
 // Chunk represents a logical code unit extracted by the parser.
 type Chunk struct {
-	Name    string
-	Kind    string
-	File    string
-	Line    int
-	Content string
+	Name       string
+	Kind       string
+	File       string
+	Line       int
+	Content    string
+	ParentName string // non-empty when this is a sub-chunk of a larger symbol
+}
+
+const (
+	// maxEmbedChars is the soft limit before a chunk is split.
+	// nomic-embed-text supports 8192 tokens; ~4000 chars is safely within that.
+	maxEmbedChars = 4000
+	// splitOverlapLines is how many lines to repeat at the start of each new
+	// sub-chunk so the model has context continuity across split boundaries.
+	splitOverlapLines = 5
+)
+
+// SplitChunk splits a Chunk whose Content exceeds maxEmbedChars into
+// smaller sub-chunks with a short line-overlap for context continuity.
+// Sub-chunks carry ParentName so callers can trace them back to the original.
+// If the chunk fits within maxEmbedChars it is returned as a single-element slice.
+func SplitChunk(c Chunk) []Chunk {
+	if len(c.Content) <= maxEmbedChars {
+		return []Chunk{c}
+	}
+
+	lines := strings.Split(c.Content, "\n")
+
+	// First pass: collect all parts so we know the total count for naming.
+	var parts [][]string
+	var cur []string
+	curLen := 0
+
+	for _, line := range lines {
+		lineLen := len(line) + 1 // +1 for the newline
+		if curLen+lineLen > maxEmbedChars && len(cur) > 0 {
+			parts = append(parts, cur)
+			// Seed the next part with the last N lines for overlap.
+			if len(cur) > splitOverlapLines {
+				cur = append([]string(nil), cur[len(cur)-splitOverlapLines:]...)
+			} else {
+				cur = append([]string(nil), cur...)
+			}
+			curLen = linesLen(cur)
+		}
+		cur = append(cur, line)
+		curLen += lineLen
+	}
+	if len(cur) > 0 {
+		parts = append(parts, cur)
+	}
+
+	total := len(parts)
+	result := make([]Chunk, total)
+	for i, p := range parts {
+		sub := c
+		sub.Content = strings.Join(p, "\n")
+		sub.Name = fmt.Sprintf("%s[%d/%d]", c.Name, i+1, total)
+		sub.ParentName = c.Name
+		result[i] = sub
+	}
+	return result
+}
+
+func linesLen(lines []string) int {
+	n := 0
+	for _, l := range lines {
+		n += len(l) + 1
+	}
+	return n
 }
 
 // extractor is a function that walks a tree-sitter AST and returns Chunks.

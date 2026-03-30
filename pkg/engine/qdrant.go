@@ -16,12 +16,13 @@ type QdrantStore struct {
 
 // SearchResult is a result returned from Qdrant vector search.
 type SearchResult struct {
-	Name    string
-	Kind    string
-	File    string
-	Line    int
-	Content string
-	Score   float32
+	Name       string
+	Kind       string
+	File       string
+	Line       int
+	Content    string
+	Score      float32
+	ParentName string
 }
 
 // NewQdrantStore connects to Qdrant and ensures the collection exists.
@@ -76,11 +77,12 @@ func (s *QdrantStore) Upsert(chunk Chunk, vec []float32) error {
 				Id:      qdrant.NewIDNum(id),
 				Vectors: qdrant.NewVectors(vec...),
 				Payload: map[string]*qdrant.Value{
-					"name":    {Kind: &qdrant.Value_StringValue{StringValue: chunk.Name}},
-					"kind":    {Kind: &qdrant.Value_StringValue{StringValue: chunk.Kind}},
-					"file":    {Kind: &qdrant.Value_StringValue{StringValue: chunk.File}},
-					"line":    {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(chunk.Line)}},
-					"content": {Kind: &qdrant.Value_StringValue{StringValue: chunk.Content}},
+					"name":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.Name}},
+					"kind":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.Kind}},
+					"file":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.File}},
+					"line":        {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(chunk.Line)}},
+					"content":     {Kind: &qdrant.Value_StringValue{StringValue: chunk.Content}},
+					"parent_name": {Kind: &qdrant.Value_StringValue{StringValue: chunk.ParentName}},
 				},
 			},
 		},
@@ -105,12 +107,13 @@ func (s *QdrantStore) Search(vec []float32, limit int) ([]SearchResult, error) {
 	for _, r := range results {
 		p := r.Payload
 		out = append(out, SearchResult{
-			Name:    stringVal(p, "name"),
-			Kind:    stringVal(p, "kind"),
-			File:    stringVal(p, "file"),
-			Line:    int(intVal(p, "line")),
-			Content: stringVal(p, "content"),
-			Score:   r.Score,
+			Name:       stringVal(p, "name"),
+			Kind:       stringVal(p, "kind"),
+			File:       stringVal(p, "file"),
+			Line:       int(intVal(p, "line")),
+			Content:    stringVal(p, "content"),
+			Score:      r.Score,
+			ParentName: stringVal(p, "parent_name"),
 		})
 	}
 	return out, nil

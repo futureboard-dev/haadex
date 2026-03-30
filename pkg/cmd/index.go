@@ -95,25 +95,27 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 		for _, chunk := range chunks {
 			chunk.File = rel
-			hash := sha256Hash(chunk.Content)
+			for _, sub := range engine.SplitChunk(chunk) {
+				hash := sha256Hash(sub.Content)
 
-			vec, err := embedder.Embed("search_document: " + chunk.Content)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "warn: embed %s:%s: %v\n", rel, chunk.Name, err)
-				continue
-			}
-			// Truncate to 512 dimensions (Matryoshka)
-			if len(vec) > 512 {
-				vec = vec[:512]
-			}
+				vec, err := embedder.Embed("search_document: " + sub.Content)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warn: embed %s:%s: %v\n", rel, sub.Name, err)
+					continue
+				}
+				// Truncate to 512 dimensions (Matryoshka)
+				if len(vec) > 512 {
+					vec = vec[:512]
+				}
 
-			if err := db.Upsert(chunk, hash); err != nil {
-				fmt.Fprintf(os.Stderr, "warn: sqlite upsert: %v\n", err)
+				if err := db.Upsert(sub, hash); err != nil {
+					fmt.Fprintf(os.Stderr, "warn: sqlite upsert: %v\n", err)
+				}
+				if err := store.Upsert(sub, vec); err != nil {
+					fmt.Fprintf(os.Stderr, "warn: qdrant upsert: %v\n", err)
+				}
+				indexed++
 			}
-			if err := store.Upsert(chunk, vec); err != nil {
-				fmt.Fprintf(os.Stderr, "warn: qdrant upsert: %v\n", err)
-			}
-			indexed++
 		}
 
 		fmt.Printf("  indexed %s (%d chunks)\n", rel, len(chunks))

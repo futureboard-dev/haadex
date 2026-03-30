@@ -115,6 +115,7 @@ haadex index ./src     # index a subdirectory
 - Model: `nomic-embed-text` (via Ollama)
 - Prefix: `search_document:` at index time, `search_query:` at query time
 - Dimensions: truncated to **512** (Matryoshka) for memory efficiency
+- **Large symbol splitting:** symbols whose source exceeds 4 000 characters are automatically split into overlapping sub-chunks (5-line overlap). Sub-chunks are named `SymbolName[1/N]` and carry a `parent_name` field linking them back to the original symbol, so search results always trace to the right declaration.
 
 ### `haadex query "<text>"`
 
@@ -145,9 +146,21 @@ haadex query "HTTP handler" -n 5           # limit to 5 results per layer
     "line":    42,
     "score":   0.9231,
     "snippet": "func AuthMiddleware(next http.Handler) http.Handler {..."
+  },
+  {
+    "layer":   "semantic",
+    "file":    "src/app/dashboard/CreateConsultationForm.tsx",
+    "name":    "CreateConsultationForm[2/3]",
+    "kind":    "function",
+    "line":    1,
+    "score":   0.8912,
+    "snippet": "...",
+    "parent":  "CreateConsultationForm"
   }
 ]
 ```
+
+> Sub-chunk results include the original symbol name in `name` as `Symbol[part/total]`. Use `parent_name` (returned in JSON from `--json` mode) to group all parts of a large symbol together.
 
 ---
 

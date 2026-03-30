@@ -318,18 +318,20 @@ func handleIndexDir(args map[string]any) (string, error) {
 		}
 		for _, chunk := range chunks {
 			chunk.File = rel
-			h := sha256.Sum256([]byte(chunk.Content))
-			hash := fmt.Sprintf("%x", h)
-			vec, err := embedder.Embed("search_document: " + chunk.Content)
-			if err != nil {
-				continue
+			for _, sub := range engine.SplitChunk(chunk) {
+				h := sha256.Sum256([]byte(sub.Content))
+				hash := fmt.Sprintf("%x", h)
+				vec, err := embedder.Embed("search_document: " + sub.Content)
+				if err != nil {
+					continue
+				}
+				if len(vec) > 512 {
+					vec = vec[:512]
+				}
+				db.Upsert(sub, hash)
+				store.Upsert(sub, vec)
+				indexed++
 			}
-			if len(vec) > 512 {
-				vec = vec[:512]
-			}
-			db.Upsert(chunk, hash)
-			store.Upsert(chunk, vec)
-			indexed++
 		}
 		return nil
 	})

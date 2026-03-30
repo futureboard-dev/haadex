@@ -14,13 +14,14 @@ type SQLiteStore struct {
 
 // SymbolRow is a record returned from SQLite queries.
 type SymbolRow struct {
-	ID      int64
-	Name    string
-	Kind    string
-	File    string
-	Line    int
-	Content string
-	Hash    string
+	ID         int64
+	Name       string
+	Kind       string
+	File       string
+	Line       int
+	Content    string
+	Hash       string
+	ParentName string
 }
 
 // NewSQLiteStore opens (or creates) the SQLite database and ensures tables exist.
@@ -40,19 +41,23 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 		return nil, err
 	}
 
+	// Migration: add parent_name if upgrading from older schema (no-op if already present).
+	db.Exec(`ALTER TABLE symbols ADD COLUMN parent_name TEXT NOT NULL DEFAULT ''`)
+
 	return &SQLiteStore{db: db}, nil
 }
 
 func createSchema(db *sql.DB) error {
 	_, err := db.Exec(`
 		CREATE TABLE IF NOT EXISTS symbols (
-			id      INTEGER PRIMARY KEY AUTOINCREMENT,
-			name    TEXT NOT NULL,
-			kind    TEXT NOT NULL,
-			file    TEXT NOT NULL,
-			line    INTEGER NOT NULL,
-			content TEXT NOT NULL,
-			hash    TEXT NOT NULL UNIQUE
+			id          INTEGER PRIMARY KEY AUTOINCREMENT,
+			name        TEXT NOT NULL,
+			kind        TEXT NOT NULL,
+			file        TEXT NOT NULL,
+			line        INTEGER NOT NULL,
+			content     TEXT NOT NULL,
+			hash        TEXT NOT NULL UNIQUE,
+			parent_name TEXT NOT NULL DEFAULT ''
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -98,15 +103,15 @@ func (s *SQLiteStore) Upsert(chunk Chunk, hash string) error {
 	if err == nil {
 		// Already indexed, update in case file moved
 		_, err = s.db.Exec(
-			`UPDATE symbols SET name=?, kind=?, file=?, line=?, content=? WHERE id=?`,
-			chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, id,
+			`UPDATE symbols SET name=?, kind=?, file=?, line=?, content=?, parent_name=? WHERE id=?`,
+			chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, chunk.ParentName, id,
 		)
 		return err
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO symbols (name, kind, file, line, content, hash) VALUES (?, ?, ?, ?, ?, ?)`,
-		chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, hash,
+		`INSERT INTO symbols (name, kind, file, line, content, hash, parent_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+		chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, hash, chunk.ParentName,
 	)
 	return err
 }
@@ -114,7 +119,7 @@ func (s *SQLiteStore) Upsert(chunk Chunk, hash string) error {
 // SearchSymbol finds symbols whose name matches the query string (case-insensitive prefix/exact).
 func (s *SQLiteStore) SearchSymbol(query string, limit int) ([]SymbolRow, error) {
 	rows, err := s.db.Query(
-		`SELECT id, name, kind, file, line, content FROM symbols
+		`SELECT id, name, kind, file, line, content, parent_name FROM symbols
 		 WHERE lower(name) LIKE lower(?) ORDER BY name LIMIT ?`,
 		"%"+query+"%", limit,
 	)
@@ -128,7 +133,7 @@ func (s *SQLiteStore) SearchSymbol(query string, limit int) ([]SymbolRow, error)
 // SearchTrigram uses FTS5 trigram index for substring matching.
 func (s *SQLiteStore) SearchTrigram(query string, limit int) ([]SymbolRow, error) {
 	rows, err := s.db.Query(
-		`SELECT s.id, s.name, s.kind, s.file, s.line, s.content
+		`SELECT s.id, s.name, s.kind, s.file, s.line, s.content, s.parent_name
 		 FROM symbols_fts f
 		 JOIN symbols s ON s.id = f.rowid
 		 WHERE symbols_fts MATCH ?
@@ -146,7 +151,7 @@ func scanRows(rows *sql.Rows) ([]SymbolRow, error) {
 	var results []SymbolRow
 	for rows.Next() {
 		var r SymbolRow
-		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.File, &r.Line, &r.Content); err != nil {
+		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.File, &r.Line, &r.Content, &r.ParentName); err != nil {
 			return nil, err
 		}
 		results = append(results, r)
