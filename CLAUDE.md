@@ -1,0 +1,19 @@
+# Haadex — Code Search
+
+This project is indexed with [haadex](https://github.com/haadex/haadex).
+The `search_code` and `index_dir` MCP tools are available.
+
+## When to use `search_code`
+- Before reading or editing any unfamiliar file — search first, then read
+- When asked where something is implemented
+- Before adding new code — check if something similar already exists
+- When you need to understand how a type/function is used across the codebase
+
+## When to use `index_dir`
+- First session on this project (run once): `index_dir` with path `.`
+- After large refactors or many new files are added
+
+## Rules
+- Prefer `search_code` over Grep/Glob for semantic questions
+- Use Grep/Glob only for exact patterns or file structure exploration
+- If `search_code` returns 0 results, fall back to Grep

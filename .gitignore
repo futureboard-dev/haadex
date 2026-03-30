@@ -1,0 +1,11 @@
+# Binary
+haadex
+
+# Haadex runtime data
+.haadex/*
+
+# Go
+vendor/
+
+# macOS
+.DS_Store

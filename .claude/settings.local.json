@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(go mod:*)",
+      "Bash(go get:*)",
+      "Bash(go build:*)",
+      "Bash(docker compose:*)",
+      "Bash(docker ps:*)",
+      "Bash(go test:*)",
+      "Bash(go install:*)",
+      "Bash(claude mcp:*)",
+      "mcp__haadex__search_code"
+    ]
+  }
+}
