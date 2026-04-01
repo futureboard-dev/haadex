@@ -2,6 +2,7 @@ package cmd
 
 import (
 	"bufio"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	ignore "github.com/sabhiram/go-gitignore"
 	"github.com/spf13/cobra"
@@ -200,15 +202,20 @@ func handleSearchCode(args map[string]any) (string, error) {
 		limit = int(v)
 	}
 
-	dbPath := filepath.Join(".haadex", "symbols.db")
+	cfg, err := loadConfig(".")
+	if err != nil {
+		return "", err
+	}
+
+	dbPath := filepath.Join(haadexDir, "symbols.db")
 	db, err := engine.NewSQLiteStore(dbPath)
 	if err != nil {
 		return "", fmt.Errorf("sqlite: %w", err)
 	}
 	defer db.Close()
 
-	embedder := engine.NewEmbedder(getOllamaURL())
-	store, err := engine.NewQdrantStore(getQdrantURL(), "haadex", 512)
+	embedder := engine.NewEmbedder(getOpenAIKey())
+	store, err := engine.NewQdrantStore(getQdrantURL(), cfg.Collection, engine.EmbedDim)
 	if err != nil {
 		return "", fmt.Errorf("qdrant: %w", err)
 	}
@@ -238,10 +245,7 @@ func handleSearchCode(args map[string]any) (string, error) {
 		}
 	}
 
-	if vec, err := embedder.Embed("search_query: " + query); err == nil {
-		if len(vec) > 512 {
-			vec = vec[:512]
-		}
+	if vec, err := embedder.Embed(context.Background(), "search_query: " + query); err == nil {
 		if semantic, err := store.Search(vec, limit); err == nil {
 			for _, s := range semantic {
 				r := Result{Layer: "semantic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Score: s.Score, Snippet: truncate(s.Content, 300)}
@@ -270,14 +274,33 @@ func handleIndexDir(args map[string]any) (string, error) {
 		root = v
 	}
 
-	embedder := engine.NewEmbedder(getOllamaURL())
-	store, err := engine.NewQdrantStore(getQdrantURL(), "haadex", 512)
+	absRoot, err := filepath.Abs(root)
+	if err != nil {
+		return "", fmt.Errorf("resolve root: %w", err)
+	}
+
+	cfg, err := loadConfig(root)
+	if err != nil {
+		cfg = &HaadexConfig{
+			Root:       absRoot,
+			Collection: deriveCollection(absRoot),
+		}
+		if mkErr := os.MkdirAll(filepath.Join(root, haadexDir), 0755); mkErr != nil {
+			return "", fmt.Errorf("create .haadex dir: %w", mkErr)
+		}
+		if mkErr := saveConfig(root, cfg); mkErr != nil {
+			return "", fmt.Errorf("write config: %w", mkErr)
+		}
+	}
+
+	embedder := engine.NewEmbedder(getOpenAIKey())
+	store, err := engine.NewQdrantStore(getQdrantURL(), cfg.Collection, engine.EmbedDim)
 	if err != nil {
 		return "", fmt.Errorf("qdrant: %w", err)
 	}
 	defer store.Close()
 
-	dbPath := filepath.Join(".haadex", "symbols.db")
+	dbPath := filepath.Join(root, haadexDir, "symbols.db")
 	db, err := engine.NewSQLiteStore(dbPath)
 	if err != nil {
 		return "", fmt.Errorf("sqlite: %w", err)
@@ -286,14 +309,15 @@ func handleIndexDir(args map[string]any) (string, error) {
 
 	gi, _ := ignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
 
-	var total, indexed int
-	err = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+	// Collect current files and their hashes.
+	currentFiles := map[string]string{}
+	filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return nil
 		}
 		if d.IsDir() {
 			name := d.Name()
-			if name == ".haadex" || name == ".git" || name == "node_modules" || name == "vendor" {
+			if name == haadexDir || name == ".git" || name == "node_modules" || name == "vendor" {
 				return filepath.SkipDir
 			}
 			return nil
@@ -303,41 +327,72 @@ func handleIndexDir(args map[string]any) (string, error) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))
-		lang, ok := extByLang[ext]
-		if !ok {
+		if _, ok := extByLang[ext]; !ok {
 			return nil
 		}
-		total++
 		content, err := os.ReadFile(path)
 		if err != nil {
 			return nil
 		}
+		h := sha256.Sum256(content)
+		currentFiles[rel] = fmt.Sprintf("%x", h)
+		return nil
+	})
+
+	// Remove stale files.
+	indexedFiles, _ := db.ListFiles()
+	for _, f := range indexedFiles {
+		if _, exists := currentFiles[f]; !exists {
+			db.DeleteByFile(f)
+			store.DeleteByFile(f)
+		}
+	}
+
+	// Index new and changed files.
+	var total, indexed, skipped int
+	for rel, fileHash := range currentFiles {
+		storedHash, found, err := db.GetFileHash(rel)
+		if err == nil && found && storedHash == fileHash {
+			skipped++
+			continue
+		}
+		if found {
+			db.DeleteByFile(rel)
+			store.DeleteByFile(rel)
+		}
+
+		absPath := filepath.Join(root, rel)
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(rel))
+		lang := extByLang[ext]
 		chunks, err := engine.ParseFile(content, lang)
 		if err != nil {
-			return nil
+			continue
 		}
+		total++
 		for _, chunk := range chunks {
 			chunk.File = rel
 			for _, sub := range engine.SplitChunk(chunk) {
 				h := sha256.Sum256([]byte(sub.Content))
 				hash := fmt.Sprintf("%x", h)
-				vec, err := embedder.Embed("search_document: " + sub.Content)
+				vec, err := embedder.Embed(context.Background(), "search_document: " + sub.Content)
 				if err != nil {
 					continue
-				}
-				if len(vec) > 512 {
-					vec = vec[:512]
 				}
 				db.Upsert(sub, hash)
 				store.Upsert(sub, vec)
 				indexed++
 			}
 		}
-		return nil
-	})
-	if err != nil {
-		return "", err
+		db.UpsertFileHash(rel, fileHash)
 	}
 
-	return fmt.Sprintf("Indexed %d chunks from %d files in %s", indexed, total, root), nil
+	now := time.Now()
+	cfg.IndexedAt = &now
+	saveConfig(root, cfg)
+
+	return fmt.Sprintf("Indexed %d chunks from %d files (%d unchanged) in %s", indexed, total, skipped, root), nil
 }

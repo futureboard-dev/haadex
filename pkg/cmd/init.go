@@ -29,29 +29,14 @@ services:
     networks:
       - haadex-net
 
-  ollama:
-    image: ollama/ollama:latest
-    container_name: haadex-ollama
-    ports:
-      - "11434:11434"
-    volumes:
-      - ./ollama_storage:/root/.ollama
-    networks:
-      - haadex-net
-
 networks:
   haadex-net:
     driver: bridge
 `
 
 func runInit(cmd *cobra.Command, args []string) error {
-	haadexDir := ".haadex"
-
 	if err := os.MkdirAll(filepath.Join(haadexDir, "qdrant_storage"), 0755); err != nil {
 		return fmt.Errorf("failed to create qdrant_storage dir: %w", err)
-	}
-	if err := os.MkdirAll(filepath.Join(haadexDir, "ollama_storage"), 0755); err != nil {
-		return fmt.Errorf("failed to create ollama_storage dir: %w", err)
 	}
 
 	composePath := filepath.Join(haadexDir, "docker-compose.yml")
@@ -59,11 +44,25 @@ func runInit(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to write docker-compose.yml: %w", err)
 	}
 
+	absRoot, err := filepath.Abs(".")
+	if err != nil {
+		return fmt.Errorf("failed to resolve project root: %w", err)
+	}
+	cfg := &HaadexConfig{
+		Root:       absRoot,
+		Collection: deriveCollection(absRoot),
+	}
+	if err := saveConfig(".", cfg); err != nil {
+		return fmt.Errorf("failed to write config.json: %w", err)
+	}
+
 	fmt.Println("✓ Initialized .haadex/")
 	fmt.Println("✓ Generated .haadex/docker-compose.yml")
+	fmt.Println("✓ Generated .haadex/config.json")
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  haadex up      # Start Qdrant and Ollama containers")
+	fmt.Println("  export OPENAI_API_KEY=sk-...")
+	fmt.Println("  haadex up      # Start Qdrant container")
 	fmt.Println("  haadex index   # Index your codebase")
 	return nil
 }

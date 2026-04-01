@@ -119,6 +119,47 @@ func (s *QdrantStore) Search(vec []float32, limit int) ([]SearchResult, error) {
 	return out, nil
 }
 
+// DeleteByFile removes all points whose payload `file` field matches the given path.
+func (s *QdrantStore) DeleteByFile(file string) error {
+	_, err := s.client.Delete(context.Background(), &qdrant.DeletePoints{
+		CollectionName: s.collection,
+		Points: &qdrant.PointsSelector{
+			PointsSelectorOneOf: &qdrant.PointsSelector_Filter{
+				Filter: &qdrant.Filter{
+					Must: []*qdrant.Condition{{
+						ConditionOneOf: &qdrant.Condition_Field{
+							Field: &qdrant.FieldCondition{
+								Key: "file",
+								Match: &qdrant.Match{
+									MatchValue: &qdrant.Match_Keyword{
+										Keyword: file,
+									},
+								},
+							},
+						},
+					}},
+				},
+			},
+		},
+	})
+	return err
+}
+
+// ResetCollection drops and recreates the collection, clearing all vectors.
+func (s *QdrantStore) ResetCollection() error {
+	ctx := context.Background()
+	exists, err := s.client.CollectionExists(ctx, s.collection)
+	if err != nil {
+		return fmt.Errorf("check collection: %w", err)
+	}
+	if exists {
+		if err := s.client.DeleteCollection(ctx, s.collection); err != nil {
+			return fmt.Errorf("delete collection: %w", err)
+		}
+	}
+	return s.ensureCollection(ctx)
+}
+
 // Close closes the gRPC connection.
 func (s *QdrantStore) Close() error {
 	return s.client.Close()

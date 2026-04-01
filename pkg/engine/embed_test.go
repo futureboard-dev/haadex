@@ -1,31 +1,39 @@
 package engine
 
 import (
+	"context"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 )
 
-func mockOllamaServer(t *testing.T, embedding []float32) *httptest.Server {
+func mockOpenAIServer(t *testing.T, embedding []float32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/embeddings" {
+		if r.URL.Path != "/v1/embeddings" {
 			http.NotFound(w, r)
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: embedding})
+		json.NewEncoder(w).Encode(openAIEmbedResponse{
+			Data: []struct {
+				Embedding []float32 `json:"embedding"`
+			}{{Embedding: embedding}},
+		})
 	}))
+}
+
+func newTestEmbedder(baseURL string) *Embedder {
+	return &Embedder{apiKey: "test", baseURL: baseURL, client: &http.Client{}}
 }
 
 func TestEmbed_Success(t *testing.T) {
 	want := []float32{0.1, 0.2, 0.3}
-	srv := mockOllamaServer(t, want)
+	srv := mockOpenAIServer(t, want)
 	defer srv.Close()
 
-	e := NewEmbedder(srv.URL)
-	got, err := e.Embed("hello world")
+	got, err := newTestEmbedder(srv.URL).Embed(context.Background(), "hello world")
 	if err != nil {
 		t.Fatalf("Embed: %v", err)
 	}
@@ -45,8 +53,7 @@ func TestEmbed_ServerError(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := NewEmbedder(srv.URL)
-	_, err := e.Embed("hello")
+	_, err := newTestEmbedder(srv.URL).Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error on 500 response")
 	}
@@ -55,20 +62,18 @@ func TestEmbed_ServerError(t *testing.T) {
 func TestEmbed_EmptyEmbedding(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
-		json.NewEncoder(w).Encode(ollamaEmbedResponse{Embedding: []float32{}})
+		json.NewEncoder(w).Encode(openAIEmbedResponse{})
 	}))
 	defer srv.Close()
 
-	e := NewEmbedder(srv.URL)
-	_, err := e.Embed("hello")
+	_, err := newTestEmbedder(srv.URL).Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error for empty embedding")
 	}
 }
 
 func TestEmbed_ConnectionRefused(t *testing.T) {
-	e := NewEmbedder("http://127.0.0.1:19999")
-	_, err := e.Embed("hello")
+	_, err := newTestEmbedder("http://127.0.0.1:19999").Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error when server is unreachable")
 	}
@@ -81,8 +86,7 @@ func TestEmbed_InvalidJSON(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	e := NewEmbedder(srv.URL)
-	_, err := e.Embed("hello")
+	_, err := newTestEmbedder(srv.URL).Embed(context.Background(), "hello")
 	if err == nil {
 		t.Fatal("expected error for invalid JSON response")
 	}

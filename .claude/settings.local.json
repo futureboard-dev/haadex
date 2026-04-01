@@ -9,7 +9,17 @@
       "Bash(go test:*)",
       "Bash(go install:*)",
       "Bash(claude mcp:*)",
-      "mcp__haadex__search_code"
+      "mcp__haadex__search_code",
+      "Bash(python3 -c \"import json,sys; d=json.load\\(sys.stdin\\); print\\(json.dumps\\(d.get\\(''''mcpServers'''',{}\\), indent=2\\)\\)\")",
+      "Bash(haadex --version)",
+      "Bash(haadex index:*)",
+      "Bash(curl -s http://localhost:11434/api/tags)",
+      "Bash(time curl:*)",
+      "Bash(python3 -c \"import sys,json; d=json.load\\(sys.stdin\\); print\\(f''''embedding dims: {len\\(d[\"\"embedding\"\"]\\)}''''\\)\")",
+      "Bash(curl -s http://localhost:6333/healthz)",
+      "Bash(curl -s http://localhost:6334/healthz)",
+      "Bash(haadex version:*)",
+      "Bash(python3 -m json.tool)"
     ]
   }
 }

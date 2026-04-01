@@ -91,6 +91,11 @@ func createSchema(db *sql.DB) error {
 		AFTER DELETE ON symbols BEGIN
 			DELETE FROM symbols_fts WHERE rowid = old.id;
 		END;
+
+		CREATE TABLE IF NOT EXISTS files (
+			path TEXT PRIMARY KEY,
+			hash TEXT NOT NULL
+		);
 	`)
 	return err
 }
@@ -157,6 +162,62 @@ func scanRows(rows *sql.Rows) ([]SymbolRow, error) {
 		results = append(results, r)
 	}
 	return results, rows.Err()
+}
+
+// ListFiles returns all file paths currently tracked in the index.
+func (s *SQLiteStore) ListFiles() ([]string, error) {
+	rows, err := s.db.Query(`SELECT path FROM files`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var files []string
+	for rows.Next() {
+		var path string
+		if err := rows.Scan(&path); err != nil {
+			return nil, err
+		}
+		files = append(files, path)
+	}
+	return files, rows.Err()
+}
+
+// GetFileHash returns the stored hash for a file, and whether it was found.
+func (s *SQLiteStore) GetFileHash(path string) (string, bool, error) {
+	var hash string
+	err := s.db.QueryRow(`SELECT hash FROM files WHERE path = ?`, path).Scan(&hash)
+	if err == sql.ErrNoRows {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return hash, true, nil
+}
+
+// UpsertFileHash stores or updates the hash for a file.
+func (s *SQLiteStore) UpsertFileHash(path, hash string) error {
+	_, err := s.db.Exec(
+		`INSERT INTO files (path, hash) VALUES (?, ?)
+		 ON CONFLICT(path) DO UPDATE SET hash = excluded.hash`,
+		path, hash,
+	)
+	return err
+}
+
+// DeleteByFile removes all symbols and the file entry for the given path.
+func (s *SQLiteStore) DeleteByFile(file string) error {
+	if _, err := s.db.Exec(`DELETE FROM symbols WHERE file = ?`, file); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`DELETE FROM files WHERE path = ?`, file)
+	return err
+}
+
+// Clear removes all symbols and file tracking data.
+func (s *SQLiteStore) Clear() error {
+	_, err := s.db.Exec(`DELETE FROM symbols; DELETE FROM files`)
+	return err
 }
 
 // Close closes the underlying database.

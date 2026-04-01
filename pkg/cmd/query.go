@@ -47,11 +47,15 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer db.Close()
 
-	ollamaURL := getOllamaURL()
 	qdrantURL := getQdrantURL()
 
-	embedder := engine.NewEmbedder(ollamaURL)
-	store, err := engine.NewQdrantStore(qdrantURL, "haadex", 512)
+	cfg, err := loadConfig(".")
+	if err != nil {
+		return err
+	}
+
+	embedder := engine.NewEmbedder(getOpenAIKey())
+	store, err := engine.NewQdrantStore(qdrantURL, cfg.Collection, engine.EmbedDim)
 	if err != nil {
 		return fmt.Errorf("qdrant: %w", err)
 	}
@@ -89,11 +93,8 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	// Layer 3: Semantic (Qdrant vector search)
-	vec, err := embedder.Embed("search_query: " + q)
+	vec, err := embedder.Embed(cmd.Context(), "search_query: " + q)
 	if err == nil {
-		if len(vec) > 512 {
-			vec = vec[:512]
-		}
 		semantic, err := store.Search(vec, queryLimit)
 		if err == nil {
 			for _, s := range semantic {
