@@ -245,8 +245,16 @@ func handleSearchCode(args map[string]any) (string, error) {
 		}
 	}
 
-	if vec, err := embedder.Embed(context.Background(), "search_query: " + query); err == nil {
-		if semantic, err := store.Search(vec, limit); err == nil {
+	var warnings []string
+
+	vec, embedErr := embedder.Embed(context.Background(), "search_query: "+query)
+	if embedErr != nil {
+		warnings = append(warnings, fmt.Sprintf("semantic layer unavailable: %v", embedErr))
+	} else {
+		semantic, searchErr := store.Search(vec, limit)
+		if searchErr != nil {
+			warnings = append(warnings, fmt.Sprintf("semantic search failed: %v", searchErr))
+		} else {
 			for _, s := range semantic {
 				r := Result{Layer: "semantic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Score: s.Score, Snippet: truncate(s.Content, 300)}
 				if !seen[key(r)] {
@@ -258,12 +266,18 @@ func handleSearchCode(args map[string]any) (string, error) {
 	}
 
 	if len(results) == 0 {
+		if len(warnings) > 0 {
+			return "No results found.\n\nWarnings:\n- " + strings.Join(warnings, "\n- "), nil
+		}
 		return "No results found.", nil
 	}
 
 	out, err := json.MarshalIndent(results, "", "  ")
 	if err != nil {
 		return "", err
+	}
+	if len(warnings) > 0 {
+		return string(out) + "\n\nWarnings:\n- " + strings.Join(warnings, "\n- "), nil
 	}
 	return string(out), nil
 }

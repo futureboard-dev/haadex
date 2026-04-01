@@ -9,3 +9,7 @@ vendor/
 
 # macOS
 .DS_Store
+
+
+# ai
+.claude
