@@ -6,6 +6,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -196,12 +197,29 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Sort files for stable ordering and so we can show accurate progress.
+	type fileEntry struct {
+		rel  string
+		hash string
+	}
+	sortedFiles := make([]fileEntry, 0, len(currentFiles))
+	for rel, hash := range currentFiles {
+		sortedFiles = append(sortedFiles, fileEntry{rel, hash})
+	}
+	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].rel < sortedFiles[j].rel })
+	totalFiles := len(sortedFiles)
+
 	// Index new and changed files.
 	var total, indexed, skipped int
-	for rel, fileHash := range currentFiles {
+	for i, entry := range sortedFiles {
+		rel, fileHash := entry.rel, entry.hash
+		fileNum := i + 1
+		pct := fileNum * 100 / totalFiles
+
 		if !indexForce {
 			storedHash, found, err := db.GetFileHash(rel)
 			if err == nil && found && storedHash == fileHash {
+				fmt.Printf("\r[%3d%%] %d/%d checking...%-40s", pct, fileNum, totalFiles, "")
 				skipped++
 				continue
 			}
@@ -233,13 +251,13 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 
 		total++
-		fmt.Printf("  embedding %s...\n", rel)
+		fmt.Printf("\r[%3d%%] %d/%d embedding %s\n", pct, fileNum, totalFiles, rel)
 		for _, chunk := range chunks {
 			chunk.File = rel
 			for _, sub := range engine.SplitChunk(chunk) {
 				hash := sha256Hash(sub.Content)
 
-				fmt.Printf("    chunk %s\r", sub.Name)
+				fmt.Printf("         chunk %-60s\r", sub.Name)
 				// Enrich embedding input with file path and symbol metadata
 				embedText := fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content)
 				vec, err := embedder.Embed(cmd.Context(), embedText)
@@ -262,8 +280,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			fmt.Fprintf(os.Stderr, "warn: store file hash %s: %v\n", rel, err)
 		}
 
-		fmt.Printf("  indexed %s (%d chunks)\n", rel, len(chunks))
+		fmt.Printf("         indexed %s (%d chunks)\n", rel, len(chunks))
 	}
+	fmt.Printf("\r%-80s\r", "") // clear the last progress line
 
 	// Update indexed_at in config.
 	now := time.Now()
