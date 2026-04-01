@@ -92,7 +92,53 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	gi, _ := ignore.CompileIgnoreFile(filepath.Join(root, ".gitignore"))
+	// Collect all .gitignore files (root + nested) in a first pass.
+	type gitIgnorer struct {
+		baseRel string
+		gi      *ignore.GitIgnore
+	}
+	var ignorers []gitIgnorer
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			name := d.Name()
+			if name == haadexDir || name == ".git" || name == "node_modules" || name == "vendor" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Name() == ".gitignore" {
+			gi, compErr := ignore.CompileIgnoreFile(path)
+			if compErr != nil {
+				return nil
+			}
+			dir := filepath.Dir(path)
+			relDir, _ := filepath.Rel(root, dir)
+			ignorers = append(ignorers, gitIgnorer{baseRel: relDir, gi: gi})
+		}
+		return nil
+	})
+
+	isIgnored := func(rel string) bool {
+		for _, ig := range ignorers {
+			var checkPath string
+			if ig.baseRel == "." {
+				checkPath = rel
+			} else {
+				prefix := ig.baseRel + string(filepath.Separator)
+				if !strings.HasPrefix(rel, prefix) {
+					continue
+				}
+				checkPath = rel[len(prefix):]
+			}
+			if ig.gi.MatchesPath(checkPath) {
+				return true
+			}
+		}
+		return false
+	}
 
 	// Collect all current source files on disk.
 	currentFiles := map[string]string{} // rel path -> file hash
@@ -105,10 +151,14 @@ func runIndex(cmd *cobra.Command, args []string) error {
 			if name == haadexDir || name == ".git" || name == "node_modules" || name == "vendor" {
 				return filepath.SkipDir
 			}
+			rel, _ := filepath.Rel(root, path)
+			if rel != "." && isIgnored(rel) {
+				return filepath.SkipDir
+			}
 			return nil
 		}
 		rel, _ := filepath.Rel(root, path)
-		if gi != nil && gi.MatchesPath(rel) {
+		if isIgnored(rel) {
 			return nil
 		}
 		ext := strings.ToLower(filepath.Ext(path))

@@ -11,6 +11,7 @@ haadex index  →  Tree-sitter AST  →  SQLite (symbols + trigram FTS5)
 haadex query  →  Layer 1: Symbolic  (exact/partial name match in SQLite)
               →  Layer 2: Trigram   (FTS5 substring search in SQLite)
               →  Layer 3: Semantic  (vector nearest-neighbour in Qdrant)
+              →  Cross-layer ranking (score normalization + path boosting)
               →  JSON results
 ```
 
@@ -31,13 +32,10 @@ All data (vector store, SQLite DB) lives inside `.haadex/` — one directory per
 ```bash
 git clone https://github.com/haadex/haadex
 cd haadex
-go build -ldflags "-X github.com/haadex/haadex/pkg/cmd.Version=0.1.0 \
+go build -ldflags "-X github.com/haadex/haadex/pkg/cmd.Version=1.1.0 \
   -X github.com/haadex/haadex/pkg/cmd.CommitSHA=$(git rev-parse --short HEAD) \
   -X github.com/haadex/haadex/pkg/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -o haadex .
-
-# Install to PATH
-sudo mv haadex /usr/local/bin/haadex
+  -o ~/.local/bin/haadex .
 
 # Verify
 haadex version
@@ -49,18 +47,17 @@ After editing haadex source code, rebuild and reinstall so all projects pick up 
 
 ```bash
 cd /path/to/haadex
-go build -ldflags "-X github.com/haadex/haadex/pkg/cmd.Version=0.1.0 \
+go build -ldflags "-X github.com/haadex/haadex/pkg/cmd.Version=1.1.0 \
   -X github.com/haadex/haadex/pkg/cmd.CommitSHA=$(git rev-parse --short HEAD) \
   -X github.com/haadex/haadex/pkg/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  -o haadex .
-sudo mv haadex /usr/local/bin/haadex
+  -o ~/.local/bin/haadex .
 ```
 
 Verify the other project is using the latest build:
 
 ```bash
 haadex version
-# haadex 0.1.0 (commit a3f1b2c, built 2026-04-02T10:30:00Z)
+# haadex 1.1.0 (commit a3f1b2c, built 2026-04-02T10:30:00Z)
 ```
 
 If you have Claude Code running in another project, **restart Claude Code** — the MCP server is a long-lived child process that runs the old binary until restarted.
@@ -100,13 +97,13 @@ Haadex includes a built-in MCP server that exposes `search_code` and `index_dir`
 
 ```bash
 # From your project directory (uses project-scoped config)
-claude mcp add haadex -s local -- /usr/local/bin/haadex mcp
+claude mcp add haadex -s local -- ~/.local/bin/haadex mcp
 ```
 
 Or register globally (available in all projects):
 
 ```bash
-claude mcp add haadex -s user -- /usr/local/bin/haadex mcp
+claude mcp add haadex -s user -- ~/.local/bin/haadex mcp
 ```
 
 ### 2. Enable the tools
@@ -208,6 +205,7 @@ Incremental by default — only new or changed files are re-indexed.
 | Language   | Extensions     |
 |------------|----------------|
 | Go         | `.go`          |
+| JavaScript | `.js`, `.jsx`  |
 | TypeScript | `.ts`          |
 | TSX        | `.tsx`         |
 | Python     | `.py`          |
@@ -215,13 +213,13 @@ Incremental by default — only new or changed files are re-indexed.
 **What gets extracted:**
 
 - Go: `function`, `method`, `struct`, `interface`, `type`
-- TypeScript/TSX: `function`, `arrow function`, `class`, `interface`, `type`
+- JavaScript/TypeScript/TSX: `function`, `arrow function`, `variable` (exported consts, config objects), `class`, `interface`, `type`
 - Python: `function`, `class`
 
 **Embedding details:**
 - Model: `text-embedding-3-large` (via OpenAI API)
-- Prefix: `search_document:` at index time, `search_query:` at query time
 - Dimensions: **3072**
+- Embeddings are enriched with file path and symbol metadata for better semantic retrieval
 - **Large symbol splitting:** symbols whose source exceeds 4 000 characters are automatically split into overlapping sub-chunks (5-line overlap). Sub-chunks are named `SymbolName[1/N]` and carry a `parent_name` field linking them back to the original symbol, so search results always trace to the right declaration.
 
 ### `haadex query "<text>"`
@@ -246,28 +244,29 @@ haadex query "HTTP handler" -n 5           # limit to 5 results per layer
 ```json
 [
   {
-    "layer":   "semantic",
+    "layers":  ["symbolic", "trigram"],
     "file":    "pkg/server/handler.go",
     "name":    "AuthMiddleware",
     "kind":    "function",
     "line":    42,
-    "score":   0.9231,
+    "score":   1.1,
     "snippet": "func AuthMiddleware(next http.Handler) http.Handler {..."
   },
   {
-    "layer":   "semantic",
+    "layers":  ["semantic"],
     "file":    "src/app/dashboard/CreateConsultationForm.tsx",
     "name":    "CreateConsultationForm[2/3]",
     "kind":    "function",
     "line":    1,
-    "score":   0.8912,
-    "snippet": "...",
-    "parent":  "CreateConsultationForm"
+    "score":   0.6912,
+    "snippet": "..."
   }
 ]
 ```
 
-> Sub-chunk results include the original symbol name in `name` as `Symbol[part/total]`. Use `parent_name` (returned in JSON from `--json` mode) to group all parts of a large symbol together.
+Results are ranked by a unified score across all layers. Results found by multiple layers get a bonus, so multi-layer agreement surfaces the most relevant hits first.
+
+> Sub-chunk results include the original symbol name in `name` as `Symbol[part/total]`.
 
 ### `haadex mcp`
 
@@ -330,7 +329,8 @@ haadex/
 │       ├── parser.go  Tree-sitter AST extraction (language registry)
 │       ├── sqlite.go  SQLite symbol store + FTS5 trigram index
 │       ├── qdrant.go  Qdrant gRPC vector upsert/search
-│       └── embed.go   OpenAI text-embedding-3-large client
+│       ├── embed.go   OpenAI text-embedding-3-large client
+│       └── ranker.go  Cross-layer score normalization and ranking
 └── .haadex/           (generated per project, not committed)
     ├── docker-compose.yml
     ├── config.json
