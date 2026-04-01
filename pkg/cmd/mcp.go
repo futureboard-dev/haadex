@@ -139,7 +139,7 @@ func runMCP(cmd *cobra.Command, args []string) error {
 			resp.Result = map[string]any{
 				"protocolVersion": "2024-11-05",
 				"capabilities":    map[string]any{"tools": map[string]any{}},
-				"serverInfo":      map[string]any{"name": "haadex", "version": "1.0.0"},
+				"serverInfo":      map[string]any{"name": "haadex", "version": Version},
 			}
 
 		case "notifications/initialized":

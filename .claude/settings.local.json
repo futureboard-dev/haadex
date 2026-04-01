@@ -35,7 +35,8 @@
       "Bash(curl -s http://localhost:6333/collections/haadex_66ad69653be9)",
       "Bash(curl -s 'http://localhost:6333/collections/haadex_66ad69653be9/points/scroll' -H 'Content-Type: application/json' -d '{\"limit\": 1, \"with_vector\": true, \"with_payload\": true}')",
       "Bash(python3 -c ':*)",
-      "Bash(curl -s http://localhost:6333/collections/haadex_66ad69653be9/points/query -H 'Content-Type: application/json' -d '{\"query\": [0.01, 0.02], \"limit\": 3, \"with_payload\": true}')"
+      "Bash(curl -s http://localhost:6333/collections/haadex_66ad69653be9/points/query -H 'Content-Type: application/json' -d '{\"query\": [0.01, 0.02], \"limit\": 3, \"with_payload\": true}')",
+      "Bash(/tmp/haadex-test version:*)"
     ]
   }
 }
