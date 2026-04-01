@@ -221,55 +221,47 @@ func handleSearchCode(args map[string]any) (string, error) {
 	}
 	defer store.Close()
 
-	var results []Result
-	seen := map[string]bool{}
-	key := func(r Result) string { return fmt.Sprintf("%s:%s", r.File, r.Name) }
-
-	if symbolic, err := db.SearchSymbol(query, limit); err == nil {
-		for _, s := range symbolic {
-			r := Result{Layer: "symbolic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Snippet: truncate(s.Content, 300)}
-			if !seen[key(r)] {
-				seen[key(r)] = true
-				results = append(results, r)
-			}
-		}
-	}
-
-	if trigram, err := db.SearchTrigram(query, limit); err == nil {
-		for _, s := range trigram {
-			r := Result{Layer: "trigram", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Snippet: truncate(s.Content, 300)}
-			if !seen[key(r)] {
-				seen[key(r)] = true
-				results = append(results, r)
-			}
-		}
-	}
+	// Collect raw results from each layer
+	symbolic, _ := db.SearchSymbol(query, limit)
+	trigram, _ := db.SearchTrigram(query, limit)
 
 	var warnings []string
+	var semantic []engine.SearchResult
 
-	vec, embedErr := embedder.Embed(context.Background(), "search_query: "+query)
+	vec, embedErr := embedder.Embed(context.Background(), query)
 	if embedErr != nil {
 		warnings = append(warnings, fmt.Sprintf("semantic layer unavailable: %v", embedErr))
 	} else {
-		semantic, searchErr := store.Search(vec, limit)
+		sem, searchErr := store.Search(vec, limit)
 		if searchErr != nil {
 			warnings = append(warnings, fmt.Sprintf("semantic search failed: %v", searchErr))
 		} else {
-			for _, s := range semantic {
-				r := Result{Layer: "semantic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Score: s.Score, Snippet: truncate(s.Content, 300)}
-				if !seen[key(r)] {
-					seen[key(r)] = true
-					results = append(results, r)
-				}
-			}
+			semantic = sem
 		}
 	}
 
-	if len(results) == 0 {
+	// Rank and merge across layers
+	ranked := engine.RankResults(symbolic, trigram, semantic, query)
+
+	if len(ranked) == 0 {
 		if len(warnings) > 0 {
 			return "No results found.\n\nWarnings:\n- " + strings.Join(warnings, "\n- "), nil
 		}
 		return "No results found.", nil
+	}
+
+	// Convert to output results
+	results := make([]Result, 0, len(ranked))
+	for _, r := range ranked {
+		results = append(results, Result{
+			Layers:  r.Layers,
+			File:    r.File,
+			Name:    r.Name,
+			Kind:    r.Kind,
+			Line:    r.Line,
+			Score:   r.Score,
+			Snippet: truncate(r.Content, 300),
+		})
 	}
 
 	out, err := json.MarshalIndent(results, "", "  ")
@@ -392,7 +384,8 @@ func handleIndexDir(args map[string]any) (string, error) {
 			for _, sub := range engine.SplitChunk(chunk) {
 				h := sha256.Sum256([]byte(sub.Content))
 				hash := fmt.Sprintf("%x", h)
-				vec, err := embedder.Embed(context.Background(), "search_document: " + sub.Content)
+				embedText := fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content)
+				vec, err := embedder.Embed(context.Background(), embedText)
 				if err != nil {
 					continue
 				}

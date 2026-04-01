@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"path/filepath"
+	"strings"
 
 	"github.com/spf13/cobra"
 
@@ -28,13 +29,13 @@ func init() {
 }
 
 type Result struct {
-	Layer   string  `json:"layer"`
-	File    string  `json:"file"`
-	Name    string  `json:"name"`
-	Kind    string  `json:"kind"`
-	Line    int     `json:"line"`
-	Score   float32 `json:"score,omitempty"`
-	Snippet string  `json:"snippet"`
+	Layers  []string `json:"layers"`
+	File    string   `json:"file"`
+	Name    string   `json:"name"`
+	Kind    string   `json:"kind"`
+	Line    int      `json:"line"`
+	Score   float64  `json:"score"`
+	Snippet string   `json:"snippet"`
 }
 
 func runQuery(cmd *cobra.Command, args []string) error {
@@ -61,50 +62,32 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 	defer store.Close()
 
-	var results []Result
-	seen := map[string]bool{}
+	// Collect raw results from each layer
+	symbolic, _ := db.SearchSymbol(q, queryLimit)
+	trigram, _ := db.SearchTrigram(q, queryLimit)
 
-	key := func(r Result) string {
-		return fmt.Sprintf("%s:%s", r.File, r.Name)
-	}
-
-	// Layer 1: Symbolic (exact name match in SQLite)
-	symbolic, err := db.SearchSymbol(q, queryLimit)
-	if err == nil {
-		for _, s := range symbolic {
-			r := Result{Layer: "symbolic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Snippet: truncate(s.Content, 200)}
-			if !seen[key(r)] {
-				seen[key(r)] = true
-				results = append(results, r)
-			}
+	var semantic []engine.SearchResult
+	if vec, err := embedder.Embed(cmd.Context(), q); err == nil {
+		if sem, err := store.Search(vec, queryLimit); err == nil {
+			semantic = sem
 		}
 	}
 
-	// Layer 2: Trigram FTS5
-	trigram, err := db.SearchTrigram(q, queryLimit)
-	if err == nil {
-		for _, s := range trigram {
-			r := Result{Layer: "trigram", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Snippet: truncate(s.Content, 200)}
-			if !seen[key(r)] {
-				seen[key(r)] = true
-				results = append(results, r)
-			}
-		}
-	}
+	// Rank and merge across layers
+	ranked := engine.RankResults(symbolic, trigram, semantic, q)
 
-	// Layer 3: Semantic (Qdrant vector search)
-	vec, err := embedder.Embed(cmd.Context(), "search_query: " + q)
-	if err == nil {
-		semantic, err := store.Search(vec, queryLimit)
-		if err == nil {
-			for _, s := range semantic {
-				r := Result{Layer: "semantic", File: s.File, Name: s.Name, Kind: s.Kind, Line: s.Line, Score: s.Score, Snippet: truncate(s.Content, 200)}
-				if !seen[key(r)] {
-					seen[key(r)] = true
-					results = append(results, r)
-				}
-			}
-		}
+	// Convert to output results
+	results := make([]Result, 0, len(ranked))
+	for _, r := range ranked {
+		results = append(results, Result{
+			Layers:  r.Layers,
+			File:    r.File,
+			Name:    r.Name,
+			Kind:    r.Kind,
+			Line:    r.Line,
+			Score:   r.Score,
+			Snippet: truncate(r.Content, 200),
+		})
 	}
 
 	if queryJSON {
@@ -119,10 +102,7 @@ func runQuery(cmd *cobra.Command, args []string) error {
 	}
 
 	for _, r := range results {
-		fmt.Printf("[%s] %s %s (%s:%d)\n", r.Layer, r.Kind, r.Name, r.File, r.Line)
-		if r.Score > 0 {
-			fmt.Printf("  score: %.4f\n", r.Score)
-		}
+		fmt.Printf("[%s] %s %s (%s:%d) score=%.4f\n", strings.Join(r.Layers, "+"), r.Kind, r.Name, r.File, r.Line, r.Score)
 		if r.Snippet != "" {
 			fmt.Printf("  %s\n", r.Snippet)
 		}

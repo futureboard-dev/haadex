@@ -3,6 +3,7 @@ package engine
 import (
 	"database/sql"
 	"fmt"
+	"strings"
 
 	_ "modernc.org/sqlite"
 )
@@ -22,6 +23,7 @@ type SymbolRow struct {
 	Content    string
 	Hash       string
 	ParentName string
+	Rank       float64 // FTS5 rank score (populated by SearchTrigram only)
 }
 
 // NewSQLiteStore opens (or creates) the SQLite database and ensures tables exist.
@@ -137,19 +139,42 @@ func (s *SQLiteStore) SearchSymbol(query string, limit int) ([]SymbolRow, error)
 
 // SearchTrigram uses FTS5 trigram index for substring matching.
 func (s *SQLiteStore) SearchTrigram(query string, limit int) ([]SymbolRow, error) {
+	// Split multi-word queries into OR-joined quoted trigram terms
+	// so "user settings page" matches files containing any of those words.
+	ftsQuery := query
+	if words := strings.Fields(query); len(words) > 1 {
+		quoted := make([]string, len(words))
+		for i, w := range words {
+			quoted[i] = `"` + w + `"`
+		}
+		ftsQuery = strings.Join(quoted, " OR ")
+	}
+
 	rows, err := s.db.Query(
-		`SELECT s.id, s.name, s.kind, s.file, s.line, s.content, s.parent_name
+		`SELECT s.id, s.name, s.kind, s.file, s.line, s.content, s.parent_name, f.rank
 		 FROM symbols_fts f
 		 JOIN symbols s ON s.id = f.rowid
 		 WHERE symbols_fts MATCH ?
 		 ORDER BY rank LIMIT ?`,
-		query, limit,
+		ftsQuery, limit,
 	)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	return scanRows(rows)
+	return scanRowsWithRank(rows)
+}
+
+func scanRowsWithRank(rows *sql.Rows) ([]SymbolRow, error) {
+	var results []SymbolRow
+	for rows.Next() {
+		var r SymbolRow
+		if err := rows.Scan(&r.ID, &r.Name, &r.Kind, &r.File, &r.Line, &r.Content, &r.ParentName, &r.Rank); err != nil {
+			return nil, err
+		}
+		results = append(results, r)
+	}
+	return results, rows.Err()
 }
 
 func scanRows(rows *sql.Rows) ([]SymbolRow, error) {

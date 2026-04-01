@@ -33,6 +33,8 @@ func init() {
 // Add new languages here alongside a corresponding entry in engine.registry.
 var extByLang = map[string]string{
 	".go":  "go",
+	".js":  "javascript",
+	".jsx": "javascript",
 	".ts":  "typescript",
 	".tsx": "tsx",
 	".py":  "python",
@@ -188,7 +190,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 				hash := sha256Hash(sub.Content)
 
 				fmt.Printf("    chunk %s\r", sub.Name)
-				vec, err := embedder.Embed(cmd.Context(), "search_document: " + sub.Content)
+				// Enrich embedding input with file path and symbol metadata
+				embedText := fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content)
+				vec, err := embedder.Embed(cmd.Context(), embedText)
 				if err != nil {
 					fmt.Fprintf(os.Stderr, "\nwarn: embed %s:%s: %v\n", rel, sub.Name, err)
 					continue

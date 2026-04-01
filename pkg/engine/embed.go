@@ -39,7 +39,6 @@ func NewEmbedder(apiKey string) *Embedder {
 }
 
 // Embed generates a vector for the given text.
-// Caller is responsible for prepending "search_document: " or "search_query: ".
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	payload := openAIEmbedRequest{
 		Model: "text-embedding-3-large",
