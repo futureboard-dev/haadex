@@ -40,6 +40,18 @@ sudo mv haadex /usr/local/bin/haadex
 haadex --help
 ```
 
+### Updating after source changes
+
+After editing haadex source code, rebuild and reinstall so all projects pick up the new binary:
+
+```bash
+cd /path/to/haadex
+go build -o haadex .
+sudo mv haadex /usr/local/bin/haadex
+```
+
+If you have Claude Code running in another project, **restart Claude Code** — the MCP server is a long-lived child process that runs the old binary until restarted.
+
 ---
 
 ## Quick start
