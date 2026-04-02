@@ -12,4 +12,5 @@ vendor/
 
 
 # ai
-.claude
+.claude/*
+.ai-docs

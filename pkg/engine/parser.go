@@ -30,6 +30,11 @@ const (
 	// splitOverlapLines is how many lines to repeat at the start of each new
 	// sub-chunk so the model has context continuity across split boundaries.
 	splitOverlapLines = 5
+	// minVariableChars is the minimum content length for a "variable" chunk
+	// to be worth embedding. Short variable declarations (e.g. useState hooks,
+	// simple const assignments) produce generic embeddings that pollute search
+	// results in large codebases.
+	minVariableChars = 100
 )
 
 // SplitChunk splits a Chunk whose Content exceeds maxEmbedChars into
@@ -228,9 +233,15 @@ func extractTSChunks(root *sitter.Node, content []byte) []Chunk {
 						kind = "function"
 					}
 				}
+				text := node.Content(content)
+				// Skip trivial variable declarations — short const/let/var
+				// assignments produce generic embeddings that pollute search.
+				if kind == "variable" && len(text) < minVariableChars {
+					continue
+				}
 				chunks = append(chunks, Chunk{
 					Name: name, Kind: kind,
-					Line: int(node.StartPoint().Row) + 1, Content: node.Content(content),
+					Line: int(node.StartPoint().Row) + 1, Content: text,
 				})
 			}
 		case "class_declaration":

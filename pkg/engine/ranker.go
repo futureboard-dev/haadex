@@ -20,10 +20,14 @@ type RankedResult struct {
 
 // Layer weights — symbolic matches are highest confidence, then trigram, then semantic.
 const (
-	weightSymbolic = 1.0
-	weightTrigram  = 0.85
-	weightSemantic = 0.75
+	weightSymbolic  = 1.0
+	weightTrigram   = 0.85
+	weightSemantic  = 0.75
 	multiLayerBonus = 0.1
+
+	// minSemanticScore is the cosine similarity floor for semantic results.
+	// Results below this are too low-confidence and introduce noise.
+	minSemanticScore float32 = 0.35
 )
 
 // RankResults merges results from all three layers, normalizes scores,
@@ -109,7 +113,15 @@ func RankResults(symbolic, trigram []SymbolRow, semantic []SearchResult, query s
 
 	// --- Semantic layer: cosine similarity as-is, apply weight ---
 	for _, s := range semantic {
+		// Drop low-confidence semantic results — they add noise in large indices.
+		if s.Score < minSemanticScore {
+			continue
+		}
 		score := weightSemantic * float64(s.Score)
+
+		// Boost structural symbols (functions, classes, types) over plain variables.
+		// In large codebases, variable declarations dominate and dilute results.
+		score += kindBoost(s.Kind)
 
 		k := key(s.File, s.Name)
 		if e, ok := merged[k]; ok {
@@ -153,6 +165,18 @@ func RankResults(symbolic, trigram []SymbolRow, semantic []SearchResult, query s
 	})
 
 	return results
+}
+
+// kindBoost returns a small score bonus for structural code symbols.
+// Functions, classes, interfaces, and types carry more semantic signal
+// than plain variable declarations.
+func kindBoost(kind string) float64 {
+	switch kind {
+	case "function", "method", "class", "interface", "struct", "type":
+		return 0.05
+	default:
+		return 0
+	}
 }
 
 // pathBoost returns a score bonus when query keywords match the file path.
