@@ -90,6 +90,34 @@ func (s *QdrantStore) Upsert(chunk Chunk, vec []float32) error {
 	return err
 }
 
+// UpsertBatch adds or updates multiple chunks in Qdrant in a single gRPC call.
+func (s *QdrantStore) UpsertBatch(ctx context.Context, chunks []Chunk, vecs [][]float32) error {
+	if len(chunks) == 0 {
+		return nil
+	}
+	points := make([]*qdrant.PointStruct, len(chunks))
+	for i, chunk := range chunks {
+		id := stableID(chunk.File + ":" + chunk.Name + ":" + fmt.Sprint(chunk.Line))
+		points[i] = &qdrant.PointStruct{
+			Id:      qdrant.NewIDNum(id),
+			Vectors: qdrant.NewVectors(vecs[i]...),
+			Payload: map[string]*qdrant.Value{
+				"name":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.Name}},
+				"kind":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.Kind}},
+				"file":        {Kind: &qdrant.Value_StringValue{StringValue: chunk.File}},
+				"line":        {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(chunk.Line)}},
+				"content":     {Kind: &qdrant.Value_StringValue{StringValue: chunk.Content}},
+				"parent_name": {Kind: &qdrant.Value_StringValue{StringValue: chunk.ParentName}},
+			},
+		}
+	}
+	_, err := s.client.Upsert(ctx, &qdrant.UpsertPoints{
+		CollectionName: s.collection,
+		Points:         points,
+	})
+	return err
+}
+
 // Search performs a nearest-neighbor search and returns matching chunks.
 func (s *QdrantStore) Search(vec []float32, limit int) ([]SearchResult, error) {
 	lim := uint64(limit)
