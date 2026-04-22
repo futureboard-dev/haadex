@@ -83,6 +83,7 @@ func (s *QdrantStore) Upsert(chunk Chunk, vec []float32) error {
 					"line":        {Kind: &qdrant.Value_IntegerValue{IntegerValue: int64(chunk.Line)}},
 					"content":     {Kind: &qdrant.Value_StringValue{StringValue: chunk.Content}},
 					"parent_name": {Kind: &qdrant.Value_StringValue{StringValue: chunk.ParentName}},
+					"context":     {Kind: &qdrant.Value_StringValue{StringValue: chunk.Context}},
 				},
 			},
 		},

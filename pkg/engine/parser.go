@@ -20,6 +20,7 @@ type Chunk struct {
 	File       string
 	Line       int
 	Content    string
+	Context    string // LLM-generated contextual description
 	ParentName string // non-empty when this is a sub-chunk of a larger symbol
 }
 

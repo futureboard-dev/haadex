@@ -46,6 +46,17 @@ func NewSQLiteStore(path string) (*SQLiteStore, error) {
 	// Migration: add parent_name if upgrading from older schema (no-op if already present).
 	db.Exec(`ALTER TABLE symbols ADD COLUMN parent_name TEXT NOT NULL DEFAULT ''`)
 
+	// Migration: add context column (no-op if already present).
+	db.Exec(`ALTER TABLE symbols ADD COLUMN context TEXT NOT NULL DEFAULT ''`)
+
+	// Migration: rebuild symbols_fts with context column if missing.
+	if _, err := db.Exec(`SELECT context FROM symbols_fts LIMIT 0`); err != nil {
+		if migErr := rebuildFTS(db); migErr != nil {
+			db.Close()
+			return nil, fmt.Errorf("migrate fts: %w", migErr)
+		}
+	}
+
 	return &SQLiteStore{db: db}, nil
 }
 
@@ -59,7 +70,8 @@ func createSchema(db *sql.DB) error {
 			line        INTEGER NOT NULL,
 			content     TEXT NOT NULL,
 			hash        TEXT NOT NULL UNIQUE,
-			parent_name TEXT NOT NULL DEFAULT ''
+			parent_name TEXT NOT NULL DEFAULT '',
+			context     TEXT NOT NULL DEFAULT ''
 		);
 
 		CREATE INDEX IF NOT EXISTS idx_symbols_name ON symbols(name);
@@ -70,13 +82,14 @@ func createSchema(db *sql.DB) error {
 			kind,
 			file,
 			content,
+			context,
 			tokenize='trigram'
 		);
 
 		CREATE TRIGGER IF NOT EXISTS symbols_ai
 		AFTER INSERT ON symbols BEGIN
-			INSERT INTO symbols_fts(rowid, name, kind, file, content)
-			VALUES (new.id, new.name, new.kind, new.file, new.content);
+			INSERT INTO symbols_fts(rowid, name, kind, file, content, context)
+			VALUES (new.id, new.name, new.kind, new.file, new.content, new.context);
 		END;
 
 		CREATE TRIGGER IF NOT EXISTS symbols_au
@@ -85,7 +98,8 @@ func createSchema(db *sql.DB) error {
 				name    = new.name,
 				kind    = new.kind,
 				file    = new.file,
-				content = new.content
+				content = new.content,
+				context = new.context
 			WHERE rowid = new.id;
 		END;
 
@@ -102,6 +116,42 @@ func createSchema(db *sql.DB) error {
 	return err
 }
 
+// rebuildFTS drops and recreates symbols_fts with the context column,
+// repopulating from the symbols table. Called when migrating older indices.
+func rebuildFTS(db *sql.DB) error {
+	stmts := []string{
+		`DROP TRIGGER IF EXISTS symbols_ai`,
+		`DROP TRIGGER IF EXISTS symbols_au`,
+		`DROP TRIGGER IF EXISTS symbols_ad`,
+		`DROP TABLE IF EXISTS symbols_fts`,
+		`CREATE VIRTUAL TABLE symbols_fts USING fts5(
+			name, kind, file, content, context,
+			tokenize='trigram'
+		)`,
+		`INSERT INTO symbols_fts(rowid, name, kind, file, content, context)
+			SELECT id, name, kind, file, content, context FROM symbols`,
+		`CREATE TRIGGER symbols_ai AFTER INSERT ON symbols BEGIN
+			INSERT INTO symbols_fts(rowid, name, kind, file, content, context)
+			VALUES (new.id, new.name, new.kind, new.file, new.content, new.context);
+		END`,
+		`CREATE TRIGGER symbols_au AFTER UPDATE ON symbols BEGIN
+			UPDATE symbols_fts SET
+				name = new.name, kind = new.kind, file = new.file,
+				content = new.content, context = new.context
+			WHERE rowid = new.id;
+		END`,
+		`CREATE TRIGGER symbols_ad AFTER DELETE ON symbols BEGIN
+			DELETE FROM symbols_fts WHERE rowid = old.id;
+		END`,
+	}
+	for _, stmt := range stmts {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("exec migration: %w", err)
+		}
+	}
+	return nil
+}
+
 // Upsert inserts or updates a chunk by its content hash.
 func (s *SQLiteStore) Upsert(chunk Chunk, hash string) error {
 	// Check if hash already exists
@@ -110,15 +160,15 @@ func (s *SQLiteStore) Upsert(chunk Chunk, hash string) error {
 	if err == nil {
 		// Already indexed, update in case file moved
 		_, err = s.db.Exec(
-			`UPDATE symbols SET name=?, kind=?, file=?, line=?, content=?, parent_name=? WHERE id=?`,
-			chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, chunk.ParentName, id,
+			`UPDATE symbols SET name=?, kind=?, file=?, line=?, content=?, parent_name=?, context=? WHERE id=?`,
+			chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, chunk.ParentName, chunk.Context, id,
 		)
 		return err
 	}
 
 	_, err = s.db.Exec(
-		`INSERT INTO symbols (name, kind, file, line, content, hash, parent_name) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-		chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, hash, chunk.ParentName,
+		`INSERT INTO symbols (name, kind, file, line, content, hash, parent_name, context) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`,
+		chunk.Name, chunk.Kind, chunk.File, chunk.Line, chunk.Content, hash, chunk.ParentName, chunk.Context,
 	)
 	return err
 }

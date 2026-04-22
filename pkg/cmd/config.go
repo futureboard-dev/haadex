@@ -50,3 +50,5 @@ func deriveCollection(absRoot string) string {
 	h := sha256.Sum256([]byte(absRoot))
 	return "haadex_" + fmt.Sprintf("%x", h[:6])
 }
+
+func getEnrichmentKey() string { return os.Getenv("OPENROUTER_API_KEY") }

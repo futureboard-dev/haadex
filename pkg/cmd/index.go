@@ -6,7 +6,6 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -20,9 +19,11 @@ import (
 )
 
 var (
-	indexForce     bool
-	indexWorkers   int
-	indexBatchSize int
+	indexForce         bool
+	indexWorkers       int
+	indexBatchSize     int
+	indexEnrichWorkers int
+	indexNoEnrich      bool
 )
 
 var indexCmd = &cobra.Command{
@@ -37,6 +38,8 @@ func init() {
 	indexCmd.Flags().BoolVar(&indexForce, "force", false, "drop and rebuild the entire index from scratch")
 	indexCmd.Flags().IntVar(&indexWorkers, "workers", 8, "concurrent embed workers")
 	indexCmd.Flags().IntVar(&indexBatchSize, "batch-size", 100, "chunks per embedding API call")
+	indexCmd.Flags().IntVar(&indexEnrichWorkers, "enrich-workers", 4, "concurrent LLM enrichment workers")
+	indexCmd.Flags().BoolVar(&indexNoEnrich, "no-enrich", false, "skip contextual enrichment (faster, lower quality)")
 }
 
 // extByLang maps file extensions to tree-sitter language IDs.
@@ -48,10 +51,6 @@ var extByLang = map[string]string{
 	".ts":  "typescript",
 	".tsx": "tsx",
 	".py":  "python",
-}
-
-type fileWork struct {
-	rel, hash, absPath string
 }
 
 type subChunk struct {
@@ -67,6 +66,14 @@ type embeddedResult struct {
 	vecs  [][]float32
 }
 
+type parsedFile struct {
+	rel     string
+	hash    string
+	content []byte
+	lang    string
+	chunks  []engine.Chunk
+}
+
 func runIndex(cmd *cobra.Command, args []string) error {
 	root := "."
 	if len(args) > 0 {
@@ -80,7 +87,6 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	cfg, err := loadConfig(root)
 	if err != nil {
-		// No config yet — auto-init config without docker-compose
 		cfg = &HaadexConfig{
 			Root:       absRoot,
 			Collection: deriveCollection(absRoot),
@@ -108,6 +114,16 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("sqlite: %w", err)
 	}
 	defer db.Close()
+
+	var summarizer *engine.Summarizer
+	if !indexNoEnrich {
+		enrichKey := getEnrichmentKey()
+		if enrichKey == "" {
+			fmt.Fprintln(os.Stderr, "warn: OPENROUTER_API_KEY not set, skipping contextual enrichment")
+		} else {
+			summarizer = engine.NewSummarizer(enrichKey)
+		}
+	}
 
 	if indexForce {
 		fmt.Println("Force mode: clearing existing index...")
@@ -234,9 +250,9 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	}
 	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].rel < sortedFiles[j].rel })
 
-	// Phase 1: Pre-filter (serial) — do all hash checks upfront, build toIndex list.
-	var skipped int
-	var toIndex []fileWork
+	// --- Phase 1: hash-check and parse ---
+	var toProcess []parsedFile
+	skipped := 0
 	for _, entry := range sortedFiles {
 		rel, fileHash := entry.rel, entry.hash
 
@@ -257,60 +273,96 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 
 		absPath := filepath.Join(root, rel)
-		toIndex = append(toIndex, fileWork{rel: rel, hash: fileHash, absPath: absPath})
+		content, err := os.ReadFile(absPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warn: read %s: %v\n", rel, err)
+			continue
+		}
+		ext := strings.ToLower(filepath.Ext(rel))
+		lang := extByLang[ext]
+
+		chunks, err := engine.ParseFile(content, lang)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "warn: parse %s: %v\n", rel, err)
+			continue
+		}
+
+		toProcess = append(toProcess, parsedFile{rel, fileHash, content, lang, chunks})
 	}
 
-	// Phase 2: Pipeline.
-	fileWorkCh := make(chan fileWork, 32)
+	fmt.Printf("Parsed %d files (%d unchanged)\n", len(toProcess), skipped)
+
+	// --- Phase 2: enrich with LLM context (concurrent) ---
+	if summarizer != nil && len(toProcess) > 0 {
+		fmt.Printf("Enriching %d files with LLM context (%d workers)...\n", len(toProcess), indexEnrichWorkers)
+		sem := make(chan struct{}, indexEnrichWorkers)
+		var wg sync.WaitGroup
+		for i := range toProcess {
+			wg.Add(1)
+			sem <- struct{}{}
+			go func(i int) {
+				defer wg.Done()
+				defer func() { <-sem }()
+				pf := &toProcess[i]
+				enrichment, err := summarizer.EnrichFile(cmd.Context(), pf.rel, string(pf.content), pf.chunks)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warn: enrich %s: %v\n", pf.rel, err)
+					return
+				}
+				ctxMap := make(map[string]string, len(enrichment.ChunkContexts))
+				for _, cc := range enrichment.ChunkContexts {
+					ctxMap[cc.Name] = cc.Context
+				}
+				for j := range pf.chunks {
+					pf.chunks[j].Context = ctxMap[pf.chunks[j].Name]
+				}
+				summaryChunk := engine.Chunk{
+					Name:    filepath.Base(pf.rel),
+					Kind:    "file_summary",
+					File:    pf.rel,
+					Line:    1,
+					Content: enrichment.FileSummary,
+					Context: enrichment.FileSummary,
+				}
+				pf.chunks = append([]engine.Chunk{summaryChunk}, pf.chunks...)
+			}(i)
+		}
+		wg.Wait()
+	}
+
+	// --- Phase 3: embed and store via parallel pipeline ---
 	subChunkCh := make(chan subChunk, 512)
 	batchCh := make(chan []subChunk, indexWorkers*2)
 	resultCh := make(chan embeddedResult, 64)
 
-	// Producer goroutine.
+	// Producer: emit sub-chunks from toProcess.
 	go func() {
-		defer close(fileWorkCh)
-		for _, fw := range toIndex {
-			fileWorkCh <- fw
-		}
-	}()
-
-	// Parse workers (runtime.NumCPU()).
-	var parseWg sync.WaitGroup
-	for i := 0; i < runtime.NumCPU(); i++ {
-		parseWg.Add(1)
-		go func() {
-			defer parseWg.Done()
-			for fw := range fileWorkCh {
-				content, err := os.ReadFile(fw.absPath)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "warn: read %s: %v\n", fw.rel, err)
-					continue
+		defer close(subChunkCh)
+		for _, pf := range toProcess {
+			var allSubs []engine.Chunk
+			for _, c := range pf.chunks {
+				c.File = pf.rel
+				allSubs = append(allSubs, engine.SplitChunk(c)...)
+			}
+			for i, sub := range allSubs {
+				var embedText string
+				if sub.Context != "" {
+					embedText = fmt.Sprintf("[Context: %s]\n// File: %s\n// Symbol: %s (%s)\n%s",
+						sub.Context, sub.File, sub.Name, sub.Kind, sub.Content)
+				} else {
+					embedText = fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s",
+						sub.File, sub.Name, sub.Kind, sub.Content)
 				}
-				ext := strings.ToLower(filepath.Ext(fw.rel))
-				lang := extByLang[ext]
-				chunks, err := engine.ParseFile(content, lang)
-				if err != nil {
-					fmt.Fprintf(os.Stderr, "warn: parse %s: %v\n", fw.rel, err)
-					continue
-				}
-				var allSubs []engine.Chunk
-				for _, c := range chunks {
-					c.File = fw.rel
-					allSubs = append(allSubs, engine.SplitChunk(c)...)
-				}
-				for i, sub := range allSubs {
-					subChunkCh <- subChunk{
-						chunk:     sub,
-						embedText: fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content),
-						fileHash:  fw.hash,
-						rel:       fw.rel,
-						isLast:    i == len(allSubs)-1,
-					}
+				subChunkCh <- subChunk{
+					chunk:     sub,
+					embedText: embedText,
+					fileHash:  pf.hash,
+					rel:       pf.rel,
+					isLast:    i == len(allSubs)-1,
 				}
 			}
-		}()
-	}
-	go func() { parseWg.Wait(); close(subChunkCh) }()
+		}
+	}()
 
 	// Batcher goroutine.
 	go func() {
@@ -353,8 +405,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 	// Atomic progress counters read by the ticker goroutine.
 	var atomicIndexed, atomicTotal atomic.Int64
 
-	var progressWg sync.WaitGroup
 	progressDone := make(chan struct{})
+	var progressWg sync.WaitGroup
 	progressWg.Add(1)
 	go func() {
 		defer progressWg.Done()

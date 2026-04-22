@@ -172,6 +172,8 @@ func RankResults(symbolic, trigram []SymbolRow, semantic []SearchResult, query s
 // than plain variable declarations.
 func kindBoost(kind string) float64 {
 	switch kind {
+	case "file_summary":
+		return 0.08
 	case "function", "method", "class", "interface", "struct", "type":
 		return 0.05
 	default:
