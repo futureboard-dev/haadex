@@ -6,8 +6,11 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	ignore "github.com/sabhiram/go-gitignore"
@@ -16,7 +19,11 @@ import (
 	"github.com/haadex/haadex/pkg/engine"
 )
 
-var indexForce bool
+var (
+	indexForce     bool
+	indexWorkers   int
+	indexBatchSize int
+)
 
 var indexCmd = &cobra.Command{
 	Use:   "index [path]",
@@ -28,6 +35,8 @@ var indexCmd = &cobra.Command{
 
 func init() {
 	indexCmd.Flags().BoolVar(&indexForce, "force", false, "drop and rebuild the entire index from scratch")
+	indexCmd.Flags().IntVar(&indexWorkers, "workers", 8, "concurrent embed workers")
+	indexCmd.Flags().IntVar(&indexBatchSize, "batch-size", 100, "chunks per embedding API call")
 }
 
 // extByLang maps file extensions to tree-sitter language IDs.
@@ -39,6 +48,23 @@ var extByLang = map[string]string{
 	".ts":  "typescript",
 	".tsx": "tsx",
 	".py":  "python",
+}
+
+type fileWork struct {
+	rel, hash, absPath string
+}
+
+type subChunk struct {
+	chunk     engine.Chunk
+	embedText string
+	fileHash  string
+	rel       string
+	isLast    bool
+}
+
+type embeddedResult struct {
+	batch []subChunk
+	vecs  [][]float32
 }
 
 func runIndex(cmd *cobra.Command, args []string) error {
@@ -197,7 +223,7 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Sort files for stable ordering and so we can show accurate progress.
+	// Sort files for stable ordering.
 	type fileEntry struct {
 		rel  string
 		hash string
@@ -207,23 +233,19 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		sortedFiles = append(sortedFiles, fileEntry{rel, hash})
 	}
 	sort.Slice(sortedFiles, func(i, j int) bool { return sortedFiles[i].rel < sortedFiles[j].rel })
-	totalFiles := len(sortedFiles)
 
-	// Index new and changed files.
-	var total, indexed, skipped int
-	for i, entry := range sortedFiles {
+	// Phase 1: Pre-filter (serial) — do all hash checks upfront, build toIndex list.
+	var skipped int
+	var toIndex []fileWork
+	for _, entry := range sortedFiles {
 		rel, fileHash := entry.rel, entry.hash
-		fileNum := i + 1
-		pct := fileNum * 100 / totalFiles
 
 		if !indexForce {
 			storedHash, found, err := db.GetFileHash(rel)
 			if err == nil && found && storedHash == fileHash {
-				fmt.Printf("\r[%3d%%] %d/%d checking...%-40s", pct, fileNum, totalFiles, "")
 				skipped++
 				continue
 			}
-			// File changed — clear old symbols before reindexing.
 			if found {
 				if err := db.DeleteByFile(rel); err != nil {
 					fmt.Fprintf(os.Stderr, "warn: delete stale %s: %v\n", rel, err)
@@ -235,54 +257,151 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		}
 
 		absPath := filepath.Join(root, rel)
-		content, err := os.ReadFile(absPath)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: read %s: %v\n", rel, err)
-			continue
+		toIndex = append(toIndex, fileWork{rel: rel, hash: fileHash, absPath: absPath})
+	}
+
+	// Phase 2: Pipeline.
+	fileWorkCh := make(chan fileWork, 32)
+	subChunkCh := make(chan subChunk, 512)
+	batchCh := make(chan []subChunk, indexWorkers*2)
+	resultCh := make(chan embeddedResult, 64)
+
+	// Producer goroutine.
+	go func() {
+		defer close(fileWorkCh)
+		for _, fw := range toIndex {
+			fileWorkCh <- fw
 		}
+	}()
 
-		ext := strings.ToLower(filepath.Ext(rel))
-		lang := extByLang[ext]
-
-		chunks, err := engine.ParseFile(content, lang)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "warn: parse %s: %v\n", rel, err)
-			continue
-		}
-
-		total++
-		fmt.Printf("\r[%3d%%] %d/%d embedding %s\n", pct, fileNum, totalFiles, rel)
-		for _, chunk := range chunks {
-			chunk.File = rel
-			for _, sub := range engine.SplitChunk(chunk) {
-				hash := sha256Hash(sub.Content)
-
-				fmt.Printf("         chunk %-60s\r", sub.Name)
-				// Enrich embedding input with file path and symbol metadata
-				embedText := fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content)
-				vec, err := embedder.Embed(cmd.Context(), embedText)
+	// Parse workers (runtime.NumCPU()).
+	var parseWg sync.WaitGroup
+	for i := 0; i < runtime.NumCPU(); i++ {
+		parseWg.Add(1)
+		go func() {
+			defer parseWg.Done()
+			for fw := range fileWorkCh {
+				content, err := os.ReadFile(fw.absPath)
 				if err != nil {
-					fmt.Fprintf(os.Stderr, "\nwarn: embed %s:%s: %v\n", rel, sub.Name, err)
+					fmt.Fprintf(os.Stderr, "warn: read %s: %v\n", fw.rel, err)
 					continue
 				}
+				ext := strings.ToLower(filepath.Ext(fw.rel))
+				lang := extByLang[ext]
+				chunks, err := engine.ParseFile(content, lang)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "warn: parse %s: %v\n", fw.rel, err)
+					continue
+				}
+				var allSubs []engine.Chunk
+				for _, c := range chunks {
+					c.File = fw.rel
+					allSubs = append(allSubs, engine.SplitChunk(c)...)
+				}
+				for i, sub := range allSubs {
+					subChunkCh <- subChunk{
+						chunk:     sub,
+						embedText: fmt.Sprintf("// File: %s\n// Symbol: %s (%s)\n%s", sub.File, sub.Name, sub.Kind, sub.Content),
+						fileHash:  fw.hash,
+						rel:       fw.rel,
+						isLast:    i == len(allSubs)-1,
+					}
+				}
+			}
+		}()
+	}
+	go func() { parseWg.Wait(); close(subChunkCh) }()
 
-				if err := db.Upsert(sub, hash); err != nil {
-					fmt.Fprintf(os.Stderr, "warn: sqlite upsert: %v\n", err)
-				}
-				if err := store.Upsert(sub, vec); err != nil {
-					fmt.Fprintf(os.Stderr, "warn: qdrant upsert: %v\n", err)
-				}
-				indexed++
+	// Batcher goroutine.
+	go func() {
+		defer close(batchCh)
+		var batch []subChunk
+		for sc := range subChunkCh {
+			batch = append(batch, sc)
+			if len(batch) >= indexBatchSize {
+				batchCh <- batch
+				batch = nil
 			}
 		}
-
-		if err := db.UpsertFileHash(rel, fileHash); err != nil {
-			fmt.Fprintf(os.Stderr, "warn: store file hash %s: %v\n", rel, err)
+		if len(batch) > 0 {
+			batchCh <- batch
 		}
+	}()
 
-		fmt.Printf("         indexed %s (%d chunks)\n", rel, len(chunks))
+	// Embed workers.
+	var embedWg sync.WaitGroup
+	for i := 0; i < indexWorkers; i++ {
+		embedWg.Add(1)
+		go func() {
+			defer embedWg.Done()
+			for batch := range batchCh {
+				texts := make([]string, len(batch))
+				for i, sc := range batch {
+					texts[i] = sc.embedText
+				}
+				vecs, err := embedder.EmbedBatch(cmd.Context(), texts)
+				if err != nil {
+					fmt.Fprintf(os.Stderr, "\nwarn: embed batch: %v\n", err)
+					continue
+				}
+				resultCh <- embeddedResult{batch: batch, vecs: vecs}
+			}
+		}()
 	}
-	fmt.Printf("\r%-80s\r", "") // clear the last progress line
+	go func() { embedWg.Wait(); close(resultCh) }()
+
+	// Atomic progress counters read by the ticker goroutine.
+	var atomicIndexed, atomicTotal atomic.Int64
+
+	var progressWg sync.WaitGroup
+	progressDone := make(chan struct{})
+	progressWg.Add(1)
+	go func() {
+		defer progressWg.Done()
+		ticker := time.NewTicker(500 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ticker.C:
+				fmt.Printf("\r  indexed %d chunks from %d files...", atomicIndexed.Load(), atomicTotal.Load())
+			case <-progressDone:
+				fmt.Printf("\r%-80s\r", "")
+				return
+			}
+		}
+	}()
+
+	// Writer goroutine (single — SQLite is not goroutine-safe).
+	var writeWg sync.WaitGroup
+	writeWg.Add(1)
+	go func() {
+		defer writeWg.Done()
+		for result := range resultCh {
+			chunks := make([]engine.Chunk, len(result.batch))
+			for i, sc := range result.batch {
+				chunks[i] = sc.chunk
+			}
+			if err := store.UpsertBatch(cmd.Context(), chunks, result.vecs); err != nil {
+				fmt.Fprintf(os.Stderr, "\nwarn: qdrant batch upsert: %v\n", err)
+			}
+			for _, sc := range result.batch {
+				hash := sha256Hash(sc.chunk.Content)
+				if err := db.Upsert(sc.chunk, hash); err != nil {
+					fmt.Fprintf(os.Stderr, "\nwarn: sqlite upsert: %v\n", err)
+				}
+				atomicIndexed.Add(1)
+				if sc.isLast {
+					if err := db.UpsertFileHash(sc.rel, sc.fileHash); err != nil {
+						fmt.Fprintf(os.Stderr, "\nwarn: store file hash %s: %v\n", sc.rel, err)
+					}
+					atomicTotal.Add(1)
+				}
+			}
+		}
+	}()
+	writeWg.Wait()
+	close(progressDone)
+	progressWg.Wait()
 
 	// Update indexed_at in config.
 	now := time.Now()
@@ -291,7 +410,8 @@ func runIndex(cmd *cobra.Command, args []string) error {
 		fmt.Fprintf(os.Stderr, "warn: update config: %v\n", err)
 	}
 
-	fmt.Printf("\n✓ Indexed %d chunks from %d files (%d unchanged)\n", indexed, total, skipped)
+	fmt.Printf("\n✓ Indexed %d chunks from %d files (%d unchanged)\n",
+		atomicIndexed.Load(), atomicTotal.Load(), skipped)
 	return nil
 }
 
