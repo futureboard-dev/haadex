@@ -33,7 +33,7 @@ All data (vector store, SQLite DB) lives inside `.haadex/` — one directory per
 ```bash
 git clone https://github.com/futureboard-dev/haadex
 cd haadex
-go build -ldflags "-X github.com/futureboard-dev/haadex/pkg/cmd.Version=1.1.0 \
+go build -ldflags "-X github.com/futureboard-dev/haadex/pkg/cmd.Version=0.1.0 \
   -X github.com/futureboard-dev/haadex/pkg/cmd.CommitSHA=$(git rev-parse --short HEAD) \
   -X github.com/futureboard-dev/haadex/pkg/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o ~/.local/bin/haadex .
@@ -48,7 +48,7 @@ After editing haadex source code, rebuild and reinstall so all projects pick up 
 
 ```bash
 cd /path/to/haadex
-go build -ldflags "-X github.com/futureboard-dev/haadex/pkg/cmd.Version=1.1.0 \
+go build -ldflags "-X github.com/futureboard-dev/haadex/pkg/cmd.Version=0.1.0 \
   -X github.com/futureboard-dev/haadex/pkg/cmd.CommitSHA=$(git rev-parse --short HEAD) \
   -X github.com/futureboard-dev/haadex/pkg/cmd.BuildDate=$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
   -o ~/.local/bin/haadex .
@@ -58,7 +58,7 @@ Verify the other project is using the latest build:
 
 ```bash
 haadex version
-# haadex 1.1.0 (commit a3f1b2c, built 2026-04-02T10:30:00Z)
+# haadex 0.1.0 (commit a3f1b2c, built 2026-04-02T10:30:00Z)
 ```
 
 If you have Claude Code running in another project, **restart Claude Code** — the MCP server is a long-lived child process that runs the old binary until restarted.
