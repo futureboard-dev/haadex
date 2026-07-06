@@ -1,0 +1,18 @@
+# Binary
+haadex
+
+# Haadex runtime data
+.haadex/*
+
+# Go
+vendor/
+
+# macOS
+.DS_Store
+
+
+# ai
+.claude/*
+.ai-docs
+.env
+CLAUDE.md
