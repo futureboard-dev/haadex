@@ -1,4 +1,6 @@
-# Haadex
+# haadex
+
+![Colony](docs/images/cover-haadex.png)
 
 A portable, local-first code indexer for AI agents. Haadex manages its own Qdrant infrastructure via Docker Compose and implements a **triple-layer retrieval system** so AI tools get precise, contextual answers about any codebase.
 
