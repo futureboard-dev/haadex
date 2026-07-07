@@ -101,11 +101,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	qdrantURL := getQdrantURL()
 
-	openAIKey := getOpenAIKey()
-	if openAIKey == "" {
-		return fmt.Errorf("OPENAI_API_KEY not set; export it before running `haadex index` (the embedder uses OpenAI's text-embedding-3-large)")
+	_, embeddingKey, embeddingBaseURL, embeddingModel, embeddingErr := getModelConfig(cfg.Embedding, "embedding")
+	if embeddingErr != nil {
+		return embeddingErr
 	}
-	embedder := engine.NewEmbedder(openAIKey)
+	embedder := engine.NewEmbedder(embeddingKey, embeddingBaseURL, embeddingModel)
 	store, err := engine.NewQdrantStore(qdrantURL, cfg.Collection, engine.EmbedDim)
 	if err != nil {
 		return fmt.Errorf("qdrant: %w", err)
@@ -121,11 +121,11 @@ func runIndex(cmd *cobra.Command, args []string) error {
 
 	var summarizer *engine.Summarizer
 	if !indexNoEnrich {
-		enrichKey := getEnrichmentKey()
-		if enrichKey == "" {
-			return fmt.Errorf("OPENROUTER_API_KEY not set; set it to enable contextual enrichment, or pass --no-enrich to skip")
+		_, enrichKey, enrichBaseURL, enrichModel, enrichErr := getModelConfig(cfg.Enrichment, "enrichment")
+		if enrichErr != nil {
+			return enrichErr
 		}
-		summarizer = engine.NewSummarizer(enrichKey)
+		summarizer = engine.NewSummarizer(enrichKey, enrichBaseURL, enrichModel)
 	}
 
 	if indexForce {

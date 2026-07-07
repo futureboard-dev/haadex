@@ -12,10 +12,11 @@ import (
 
 const EmbedDim = 3072
 
-// Embedder generates vector embeddings via the OpenAI embeddings API.
+// Embedder generates vector embeddings via an embeddings API.
 type Embedder struct {
 	apiKey  string
 	baseURL string
+	model   string
 	client  *http.Client
 }
 
@@ -35,11 +36,12 @@ type openAIEmbedResponse struct {
 	} `json:"data"`
 }
 
-// NewEmbedder creates an Embedder that connects to OpenAI using the given API key.
-func NewEmbedder(apiKey string) *Embedder {
+// NewEmbedder creates an Embedder that connects to an embeddings API using the given credentials.
+func NewEmbedder(apiKey, baseURL, model string) *Embedder {
 	return &Embedder{
 		apiKey:  apiKey,
-		baseURL: "https://api.openai.com",
+		baseURL: baseURL,
+		model:   model,
 		client:  &http.Client{Timeout: 120 * time.Second},
 	}
 }
@@ -47,7 +49,7 @@ func NewEmbedder(apiKey string) *Embedder {
 // Embed generates a vector for the given text.
 func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 	payload := openAIEmbedRequest{
-		Model: "text-embedding-3-large",
+		Model: e.model,
 		Input: text,
 	}
 	body, err := json.Marshal(payload)
@@ -87,7 +89,7 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 // On HTTP 429, the Retry-After header duration is used instead of the default backoff.
 func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32, error) {
 	payload := openAIEmbedBatchRequest{
-		Model: "text-embedding-3-large",
+		Model: e.model,
 		Input: texts,
 	}
 	body, err := json.Marshal(payload)

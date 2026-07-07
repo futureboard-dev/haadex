@@ -55,7 +55,11 @@ func runQuery(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
-	embedder := engine.NewEmbedder(getOpenAIKey())
+	_, embeddingKey, embeddingBaseURL, embeddingModel, embeddingErr := getModelConfig(cfg.Embedding, "embedding")
+	if embeddingErr != nil {
+		return embeddingErr
+	}
+	embedder := engine.NewEmbedder(embeddingKey, embeddingBaseURL, embeddingModel)
 	store, err := engine.NewQdrantStore(qdrantURL, cfg.Collection, engine.EmbedDim)
 	if err != nil {
 		return fmt.Errorf("qdrant: %w", err)

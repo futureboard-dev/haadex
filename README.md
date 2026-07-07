@@ -92,6 +92,82 @@ haadex query "database connection pool" --json
 
 ---
 
+## Configuration
+
+Each project's `.haadex/config.json` stores the models used for indexing and querying. You can customize which AI service handles enrichment and embedding:
+
+### Default configuration
+
+`haadex init` creates a config with sensible defaults (both OpenAI):
+
+```json
+{
+  "root": "/path/to/project",
+  "collection": "haadex_xxxxx",
+  "enrichment": {
+    "provider": "openai",
+    "api_key": "OPENAI_API_KEY",
+    "model": "gpt-4o-mini"
+  },
+  "embedding": {
+    "provider": "openai",
+    "api_key": "OPENAI_API_KEY",
+    "model": "text-embedding-3-small"
+  }
+}
+```
+
+### Custom configuration
+
+Edit `.haadex/config.json` to use different models or providers:
+
+**Mix OpenAI and OpenRouter:**
+```json
+{
+  "enrichment": {
+    "provider": "openrouter",
+    "api_key": "OPENROUTER_API_KEY",
+    "model": "deepseek/deepseek-chat-v3-0324"
+  },
+  "embedding": {
+    "provider": "openai",
+    "api_key": "OPENAI_API_KEY",
+    "model": "text-embedding-3-small"
+  }
+}
+```
+
+**Use a custom base URL:**
+```json
+{
+  "embedding": {
+    "provider": "custom",
+    "api_key": "MY_API_KEY",
+    "base_url": "https://my-api.example.com",
+    "model": "my-embedding-model"
+  }
+}
+```
+
+### Configuration fields
+
+- **provider**: `"openai"`, `"openrouter"`, or any custom provider
+- **api_key**: Environment variable name (e.g., `OPENAI_API_KEY`) — the actual key is read from the environment at runtime
+- **model**: Model identifier (e.g., `"gpt-4o-mini"`, `"text-embedding-3-small"`)
+- **base_url** (optional): Override the default API endpoint. Only needed for custom providers or self-hosted APIs.
+
+### Environment setup
+
+Before running `haadex index` or `haadex query`, export the API keys referenced in your config:
+
+```bash
+export OPENAI_API_KEY="sk-..."
+export OPENROUTER_API_KEY="sk-or-v1-..."
+haadex index
+```
+
+---
+
 ## Using with Claude Code (MCP)
 
 Haadex includes a built-in MCP server that exposes `search_code` and `index_dir` as tools for Claude Code.

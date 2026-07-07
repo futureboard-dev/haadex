@@ -51,6 +51,16 @@ func runInit(cmd *cobra.Command, args []string) error {
 	cfg := &HaadexConfig{
 		Root:       absRoot,
 		Collection: deriveCollection(absRoot),
+		Enrichment: &ModelConfig{
+			Provider: "openai",
+			APIKey:   "OPENAI_API_KEY",
+			Model:    "gpt-4o-mini",
+		},
+		Embedding: &ModelConfig{
+			Provider: "openai",
+			APIKey:   "OPENAI_API_KEY",
+			Model:    "text-embedding-3-small",
+		},
 	}
 	if err := saveConfig(".", cfg); err != nil {
 		return fmt.Errorf("failed to write config.json: %w", err)
@@ -61,8 +71,14 @@ func runInit(cmd *cobra.Command, args []string) error {
 	fmt.Println("✓ Generated .haadex/config.json")
 	fmt.Println()
 	fmt.Println("Next steps:")
-	fmt.Println("  export OPENAI_API_KEY=sk-...")
-	fmt.Println("  haadex up      # Start Qdrant container")
-	fmt.Println("  haadex index   # Index your codebase")
+	fmt.Println("  1. Edit .haadex/config.json to configure enrichment and embedding models")
+	fmt.Println("  2. export OPENAI_API_KEY=sk-...")
+	fmt.Println("  3. haadex up      # Start Qdrant container")
+	fmt.Println("  4. haadex index   # Index your codebase")
+	fmt.Println()
+	fmt.Println("Model configuration examples:")
+	fmt.Println("  OpenAI embedding:  {\"provider\": \"openai\", \"api_key\": \"OPENAI_API_KEY\", \"model\": \"text-embedding-3-small\"}")
+	fmt.Println("  OpenAI enrichment: {\"provider\": \"openai\", \"api_key\": \"OPENAI_API_KEY\", \"model\": \"gpt-4o-mini\"}")
+	fmt.Println("  OpenRouter:        {\"provider\": \"openrouter\", \"api_key\": \"OPENROUTER_API_KEY\", \"model\": \"deepseek/deepseek-chat\"}")
 	return nil
 }

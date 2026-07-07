@@ -12,15 +12,14 @@ import (
 )
 
 const (
-	enrichBaseURL   = "https://openrouter.ai/api/v1"
-	enrichModel     = "deepseek/deepseek-chat-v3-0324"
 	maxContentChars = 6000
 )
 
-// Summarizer calls OpenRouter chat completions to generate contextual descriptions.
+// Summarizer calls a chat completion API to generate contextual descriptions.
 type Summarizer struct {
 	apiKey    string
 	baseURL   string
+	model     string
 	client    *http.Client
 	retryWait time.Duration // per-attempt backoff multiplier; defaults to 2s
 }
@@ -37,11 +36,12 @@ type FileEnrichment struct {
 	ChunkContexts []ChunkContext
 }
 
-// NewSummarizer creates a Summarizer using the given OpenRouter API key.
-func NewSummarizer(apiKey string) *Summarizer {
+// NewSummarizer creates a Summarizer using the given API credentials.
+func NewSummarizer(apiKey, baseURL, model string) *Summarizer {
 	return &Summarizer{
 		apiKey:    apiKey,
-		baseURL:   enrichBaseURL,
+		baseURL:   baseURL,
+		model:     model,
 		client:    &http.Client{Timeout: 120 * time.Second},
 		retryWait: 2 * time.Second,
 	}
@@ -111,7 +111,7 @@ func (s *Summarizer) EnrichFile(ctx context.Context, filePath string, content st
 	)
 
 	req := chatRequest{
-		Model:          enrichModel,
+		Model:          s.model,
 		Messages:       []chatMessage{{Role: "user", Content: prompt}},
 		ResponseFormat: &chatFormat{Type: "json_object"},
 	}
