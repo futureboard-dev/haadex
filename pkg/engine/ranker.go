@@ -34,9 +34,9 @@ const (
 // and returns a single list sorted by combined score (descending).
 func RankResults(symbolic, trigram []SymbolRow, semantic []SearchResult, query string) []RankedResult {
 	type entry struct {
-		result   RankedResult
+		result    RankedResult
 		bestScore float64
-		layers   []string
+		layers    []string
 	}
 
 	merged := map[string]*entry{} // key = file:name

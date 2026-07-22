@@ -11,10 +11,10 @@ import (
 
 // ModelConfig describes a model provider and authentication.
 type ModelConfig struct {
-	Provider string `json:"provider"` // "openai" or "openrouter" or other provider name
-	APIKey   string `json:"api_key"`  // env var name to read the key from (e.g., "OPENAI_API_KEY")
+	Provider string `json:"provider"`           // "openai" or "openrouter" or other provider name
+	APIKey   string `json:"api_key"`            // env var name to read the key from (e.g., "OPENAI_API_KEY")
 	BaseURL  string `json:"base_url,omitempty"` // optional custom base URL
-	Model    string `json:"model"`    // model identifier (e.g., "gpt-4o-mini" or "deepseek/deepseek-chat")
+	Model    string `json:"model"`              // model identifier (e.g., "gpt-4o-mini" or "deepseek/deepseek-chat")
 }
 
 // HaadexConfig is stored in .haadex/config.json to anchor a project's index.
@@ -87,7 +87,7 @@ func getModelConfig(mc *ModelConfig, purpose string) (provider, apiKey, baseURL,
 		// Default base URLs for known providers
 		switch mc.Provider {
 		case "openai":
-			resolvedBaseURL = "https://api.openai.com"
+			resolvedBaseURL = "https://api.openai.com/v1"
 		case "openrouter":
 			resolvedBaseURL = "https://openrouter.ai/api/v1"
 		default:

@@ -57,7 +57,7 @@ func (e *Embedder) Embed(ctx context.Context, text string) ([]float32, error) {
 		return nil, err
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/v1/embeddings", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("openai request: %w", err)
 	}
@@ -101,7 +101,7 @@ func (e *Embedder) EmbedBatch(ctx context.Context, texts []string) ([][]float32,
 	var lastErr error
 
 	for attempt := 0; attempt < 3; attempt++ {
-		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/v1/embeddings", bytes.NewReader(body))
+		req, reqErr := http.NewRequestWithContext(ctx, http.MethodPost, e.baseURL+"/embeddings", bytes.NewReader(body))
 		if reqErr != nil {
 			return nil, fmt.Errorf("openai request: %w", reqErr)
 		}

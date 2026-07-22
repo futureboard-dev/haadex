@@ -37,9 +37,9 @@ type rpcRequest struct {
 }
 
 type rpcResponse struct {
-	JSONRPC string `json:"jsonrpc"`
-	ID      any    `json:"id,omitempty"`
-	Result  any    `json:"result,omitempty"`
+	JSONRPC string    `json:"jsonrpc"`
+	ID      any       `json:"id,omitempty"`
+	Result  any       `json:"result,omitempty"`
 	Error   *rpcError `json:"error,omitempty"`
 }
 
@@ -59,9 +59,9 @@ type toolDef struct {
 }
 
 type inputSchema struct {
-	Type       string              `json:"type"`
+	Type       string                `json:"type"`
 	Properties map[string]schemaProp `json:"properties"`
-	Required   []string            `json:"required"`
+	Required   []string              `json:"required"`
 }
 
 type schemaProp struct {

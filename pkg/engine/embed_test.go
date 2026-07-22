@@ -11,7 +11,7 @@ import (
 func mockOpenAIServer(t *testing.T, embedding []float32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/embeddings" {
+		if r.URL.Path != "/embeddings" {
 			http.NotFound(w, r)
 			return
 		}
@@ -95,7 +95,7 @@ func TestEmbed_InvalidJSON(t *testing.T) {
 func mockBatchServer(t *testing.T, embeddings [][]float32) *httptest.Server {
 	t.Helper()
 	return httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/embeddings" {
+		if r.URL.Path != "/embeddings" {
 			http.NotFound(w, r)
 			return
 		}
